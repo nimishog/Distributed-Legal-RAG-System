@@ -1,0 +1,1 @@
+/usr/bin/c++ -Wl,--dependency-file=CMakeFiles/database_server.dir/link.d CMakeFiles/database_server.dir/src/main.cpp.o CMakeFiles/database_server.dir/src/server.cpp.o -o database_server

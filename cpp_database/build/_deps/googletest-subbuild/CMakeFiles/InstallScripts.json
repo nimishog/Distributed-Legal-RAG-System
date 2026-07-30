@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/nimishog/Workstation/Distributed-Legal-RAG-System/cpp_database/build/_deps/googletest-subbuild/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

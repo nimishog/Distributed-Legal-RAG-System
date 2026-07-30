@@ -4,6 +4,7 @@
 #include <string>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include "thread_pool.hpp" // Bring in the thread pool
 
 using namespace std;
 
@@ -11,21 +12,18 @@ class EchoServer {
 private:
     int port;
     int serverFd;
+    ThreadPool pool; // Thread pool instance
 
 public:
     EchoServer(int port);
     ~EchoServer();
 
-    // Initializes server and loads data
     void loadData();
-
-    // TCP/IP socket and port bindings
     bool setupSocket();
-    
-    // Retrieves the socket descriptor for the listener loop in main.cpp
     int getServerFd() const;
     
-    // Client handling logic (Echo text back)
+    // New method to pass the socket to the background workers
+    void enqueueClient(int clientSocket);
     void handleClient(int clientSocket);
     
     void stop();
