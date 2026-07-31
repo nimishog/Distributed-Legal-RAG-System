@@ -1,0 +1,56 @@
+# ==========================================
+# C++ (cpp_database & cpp_router)
+# ==========================================
+# Ignores compiled binaries and CMake configuration files
+build/
+*.o
+*.out
+*.exe
+*.a
+*.so
+*.dylib
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmake
+
+# ==========================================
+# Python (api_gateway & data_ingestion)
+# ==========================================
+# Ignores compiled Python files and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.env
+
+# ==========================================
+# Node.js / React (frontend)
+# ==========================================
+# Ignores frontend dependencies and production build outputs
+node_modules/
+dist/
+dist-ssr/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.eslintcache
+
+# ==========================================
+# Project-Specific Data & Persistent Volumes
+# ==========================================
+# Ignores local datasets and persistent disk storage[cite: 1]
+cpp_database/data_volumes/
+data_ingestion/data/
+
+# ==========================================
+# OS & IDE Generated Files
+# ==========================================
+# Ignores standard system and editor clutter
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
