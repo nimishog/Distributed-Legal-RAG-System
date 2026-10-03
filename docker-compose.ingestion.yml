@@ -1,0 +1,168 @@
+# ==========================================
+# Data Ingestion Pipeline - One-off Job
+# Runs: fetch → chunk → embed → load via router
+# Usage: docker compose -f docker-compose.ingestion.yml up --build --abort-on-container-exit
+# ==========================================
+
+services:
+  ingestion:
+    build:
+      context: ./data_ingestion
+      dockerfile: Dockerfile
+    container_name: legal-rag-ingestion
+    environment:
+      # Database/Router connection
+      ROUTER_HOST: ${ROUTER_HOST:-cpp_router}
+      ROUTER_PORT: ${ROUTER_PORT:-8080}
+
+      # Ingestion limits
+      MAX_INGESTION_CHUNKS: ${MAX_INGESTION_CHUNKS:-1000}
+
+      # Embedding configuration
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/all-mpnet-base-v2}
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-32}
+      EMBEDDING_DEVICE: ${EMBEDDING_DEVICE:-cuda}
+
+      # Kaggle credentials (from GitHub Actions secrets)
+      KAGGLE_USERNAME: ${KAGGLE_USERNAME}
+      KAGGLE_KEY: ${KAGGLE_KEY}
+
+      # Logging
+      LOG_LEVEL: INFO
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      # Cache HF models and Kaggle downloads
+      - hf-cache:/root/.cache/huggingface
+      - kaggle-cache:/root/.cache/kagglehub
+    depends_on:
+      - cpp_router
+    # Run once and exit
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+
+  # Router needed for ingestion to load data
+  cpp_router:
+    build:
+      context: ./cpp_router
+      dockerfile: Dockerfile
+    container_name: legal-rag-router-ingest
+    environment:
+      DB_NODES: cpp_database_0:8081,cpp_database_1:8081,cpp_database_2:8081
+      ROUTER_PORT: 8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      - cpp_database_0
+      - cpp_database_1
+      - cpp_database_2
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 8080"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: "no"
+
+  # Database shards needed for ingestion
+  cpp_database_0:
+    build:
+      context: ./cpp_database
+      dockerfile: Dockerfile
+    container_name: legal-rag-db-0-ingest
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: legal_rag
+      DB_USER: rag_user
+      DB_PASSWORD: ${DB_PASSWORD:-localdev}
+      DB_SHARD_ID: 0
+      SERVER_PORT: 8081
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  cpp_database_1:
+    build:
+      context: ./cpp_database
+      dockerfile: Dockerfile
+    container_name: legal-rag-db-1-ingest
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: legal_rag
+      DB_USER: rag_user
+      DB_PASSWORD: ${DB_PASSWORD:-localdev}
+      DB_SHARD_ID: 1
+      SERVER_PORT: 8081
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  cpp_database_2:
+    build:
+      context: ./cpp_database
+      dockerfile: Dockerfile
+    container_name: legal-rag-db-2-ingest
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: legal_rag
+      DB_USER: rag_user
+      DB_PASSWORD: ${DB_PASSWORD:-localdev}
+      DB_SHARD_ID: 2
+      SERVER_PORT: 8081
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: legal-rag-postgres-ingest
+    environment:
+      POSTGRES_DB: legal_rag
+      POSTGRES_USER: rag_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-localdev}
+      POSTGRES_MAX_CONNECTIONS: 40
+      POSTGRES_SHARED_BUFFERS: 64MB
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 512MB
+      POSTGRES_WORK_MEM: 16MB
+      POSTGRES_MAINTENANCE_WORK_MEM: 64MB
+    volumes:
+      - ../init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
+      - pgdata-ingest:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag_user -d legal_rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+volumes:
+  hf-cache:
+  kaggle-cache:
+  pgdata-ingest:

@@ -1,0 +1,196 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: legal-rag-postgres
+    environment:
+      POSTGRES_DB: legal_rag
+      POSTGRES_USER: rag_user
+      POSTGRES_PASSWORD: localdev
+    volumes:
+      - ./init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag_user -d legal_rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+    restart: unless-stopped
+
+  cpp_database_0:
+    build:
+      context: ./cpp_database
+      dockerfile: Dockerfile
+    container_name: legal-rag-db-0
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: legal_rag
+      DB_USER: rag_user
+      DB_PASSWORD: localdev
+      DB_SHARD_ID: 0
+      SERVER_PORT: 8081
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    restart: unless-stopped
+
+  cpp_database_1:
+    build:
+      context: ./cpp_database
+      dockerfile: Dockerfile
+    container_name: legal-rag-db-1
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: legal_rag
+      DB_USER: rag_user
+      DB_PASSWORD: localdev
+      DB_SHARD_ID: 1
+      SERVER_PORT: 8081
+    ports:
+      - "8082:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    restart: unless-stopped
+
+  cpp_database_2:
+    build:
+      context: ./cpp_database
+      dockerfile: Dockerfile
+    container_name: legal-rag-db-2
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: legal_rag
+      DB_USER: rag_user
+      DB_PASSWORD: localdev
+      DB_SHARD_ID: 2
+      SERVER_PORT: 8081
+    ports:
+      - "8083:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    restart: unless-stopped
+
+  cpp_router:
+    build:
+      context: ./cpp_router
+      dockerfile: Dockerfile
+    container_name: legal-rag-router
+    environment:
+      DB_NODES: cpp_database_0:8081,cpp_database_1:8081,cpp_database_2:8081
+      ROUTER_PORT: 8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      - cpp_database_0
+      - cpp_database_1
+      - cpp_database_2
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api_gateway:
+    build:
+      context: ./api_gateway
+      dockerfile: Dockerfile
+    container_name: legal-rag-api
+    environment:
+      ROUTER_HOST: cpp_router
+      ROUTER_PORT: 8080
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ROUTER_POOL_SIZE: 2
+      LOG_LEVEL: DEBUG
+    ports:
+      - "8000:8000"
+    depends_on:
+      cpp_router:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: legal-rag-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: legal-rag-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana-dashboard.json:/var/lib/grafana/dashboards/home.json:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: legal-rag-frontend
+    environment:
+      VITE_API_URL: http://localhost:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api_gateway
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  grafana-data:

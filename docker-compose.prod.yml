@@ -1,0 +1,239 @@
+# ==========================================
+# Production Deployment - Single EC2 t3.micro
+# All services on one host with memory limits and swap
+# Usage: docker compose -f docker-compose.prod.yml up -d
+# ==========================================
+
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: legal-rag-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+      - ./certbot/www:/var/www/certbot:ro
+    depends_on:
+      - api_gateway
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 50M
+        reservations:
+          memory: 20M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  api_gateway:
+    image: ghcr.io/${GITHUB_REPOSITORY:-local}/api_gateway:${IMAGE_TAG:-latest}
+    container_name: legal-rag-api
+    environment:
+      ROUTER_HOST: localhost
+      ROUTER_PORT: 8080
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ROUTER_POOL_SIZE: 2
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    # No exposed ports - nginx proxies
+    expose:
+      - "8000"
+    depends_on:
+      cpp_router:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 300M
+        reservations:
+          memory: 150M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  cpp_router:
+    image: ghcr.io/${GITHUB_REPOSITORY:-local}/cpp_router:${IMAGE_TAG:-latest}
+    container_name: legal-rag-router
+    environment:
+      DB_NODES: cpp_database_0:8081,cpp_database_1:8081,cpp_database_2:8081
+      ROUTER_PORT: 8080
+    expose:
+      - "8080"
+    depends_on:
+      - cpp_database_0
+      - cpp_database_1
+      - cpp_database_2
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 200M
+        reservations:
+          memory: 100M
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 8080"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: legal-rag-postgres
+    environment:
+      POSTGRES_DB: legal_rag
+      POSTGRES_USER: rag_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_MAX_CONNECTIONS: 40
+      POSTGRES_SHARED_BUFFERS: 64MB
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 512MB
+      POSTGRES_WORK_MEM: 16MB
+      POSTGRES_MAINTENANCE_WORK_MEM: 64MB
+    volumes:
+      - ./init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    # No exposed ports - internal only
+    expose:
+      - "5432"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 800M
+        reservations:
+          memory: 400M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag_user -d legal_rag"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  cpp_database_0:
+    image: ghcr.io/${GITHUB_REPOSITORY:-local}/cpp_database:${IMAGE_TAG:-latest}
+    container_name: legal-rag-db-0
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: legal_rag
+      DB_USER: rag_user
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_SHARD_ID: 0
+      SERVER_PORT: 8081
+    expose:
+      - "8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 300M
+        reservations:
+          memory: 150M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  cpp_database_1:
+    image: ghcr.io/${GITHUB_REPOSITORY:-local}/cpp_database:${IMAGE_TAG:-latest}
+    container_name: legal-rag-db-1
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: legal_rag
+      DB_USER: rag_user
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_SHARD_ID: 1
+      SERVER_PORT: 8081
+    expose:
+      - "8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 300M
+        reservations:
+          memory: 150M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  cpp_database_2:
+    image: ghcr.io/${GITHUB_REPOSITORY:-local}/cpp_database:${IMAGE_TAG:-latest}
+    container_name: legal-rag-db-2
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: legal_rag
+      DB_USER: rag_user
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_SHARD_ID: 2
+      SERVER_PORT: 8081
+    expose:
+      - "8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 300M
+        reservations:
+          memory: 150M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Certbot for Let's Encrypt auto-renewal
+  certbot:
+    image: certbot/certbot:latest
+    container_name: legal-rag-certbot
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew --quiet; sleep 12h & wait $${!}; done'"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 50M
+
+volumes:
+  pgdata:
