@@ -1,92 +1,189 @@
 #include "server.hpp"
-#include <iostream>
+#include "vector_math.hpp"
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <unistd.h>
 #include <cstring>
-#include <arpa/inet.h>
+#include <iostream>
+#include <nlohmann/json.hpp>
+#include <thread>
+#include <chrono>
 
-using namespace std;
+using json = nlohmann::json;
 
-// Initialize the pool with 4 worker threads
-EchoServer::EchoServer(int p) : port(p), serverFd(-1), pool(4) {}
+Server::Server(int port, StoragePtr storage)
+    : port_(port), server_fd_(-1), pool_(4), storage_(std::move(storage)), running_(false) {}
 
-EchoServer::~EchoServer() {
+Server::~Server() {
     stop();
 }
 
-void EchoServer::loadData() {
-    cout << "Loading server configurations and data..." << endl;
-    cout << "Data loaded successfully." << endl;
-}
-
-bool EchoServer::setupSocket() {
-    serverFd = socket(AF_INET, SOCK_STREAM, 0);
-    if (serverFd == -1) {
-        cerr << "Error: Failed to create socket." << endl;
+bool Server::start() {
+    server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd_ == -1) {
+        std::cerr << "Failed to create socket" << std::endl;
         return false;
     }
 
     int opt = 1;
-    if (setsockopt(serverFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
-        cerr << "Error: Failed to set socket options." << endl;
+    if (setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        std::cerr << "Failed to set socket options" << std::endl;
         return false;
     }
 
-    sockaddr_in serverAddr{};
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_addr.s_addr = INADDR_ANY; 
-    serverAddr.sin_port = htons(port);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(port_);
 
-    if (bind(serverFd, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
-        cerr << "Error: Failed to bind to port " << port << endl;
+    if (bind(server_fd_, (sockaddr*)&addr, sizeof(addr)) < 0) {
+        std::cerr << "Failed to bind to port " << port_ << std::endl;
         return false;
     }
 
-    if (listen(serverFd, 5) < 0) {
-        cerr << "Error: Failed to listen on socket." << endl;
+    if (listen(server_fd_, 10) < 0) {
+        std::cerr << "Failed to listen" << std::endl;
         return false;
     }
 
+    running_ = true;
+    std::cout << "Database server listening on port " << port_ << std::endl;
+    run_accept_loop();
     return true;
 }
 
-int EchoServer::getServerFd() const {
-    return serverFd;
+void Server::stop() {
+    running_ = false;
+    if (server_fd_ != -1) {
+        close(server_fd_);
+        server_fd_ = -1;
+    }
 }
 
-// Wraps the handleClient function in a lambda and pushes it to the thread queue
-void EchoServer::enqueueClient(int clientSocket) {
-    pool.enqueue([this, clientSocket]() {
-        this->handleClient(clientSocket);
-    });
+void Server::run_accept_loop() {
+    while (running_) {
+        sockaddr_in client_addr{};
+        socklen_t client_len = sizeof(client_addr);
+        int client_fd = accept(server_fd_, (sockaddr*)&client_addr, &client_len);
+        if (client_fd < 0) {
+            if (running_) {
+                std::cerr << "Accept error" << std::endl;
+            }
+            continue;
+        }
+
+        pool_.enqueue([this, client_fd]() {
+            handle_client(client_fd);
+        });
+    }
 }
 
-void EchoServer::handleClient(int clientSocket) {
-    char buffer[1024];
-    
-    while (true) {
-        memset(buffer, 0, sizeof(buffer));
-        
-        ssize_t bytesRead = read(clientSocket, buffer, sizeof(buffer) - 1);
+void Server::handle_client(int client_fd) {
+    while (running_) {
+        std::string request;
+        if (!read_frame(client_fd, request)) {
+            break;
+        }
 
-        if (bytesRead > 0) {
-            // Printed the Thread ID to prove concurrency is working
-            cout << "[Thread " << this_thread::get_id() << "] Received: " << buffer;
-            send(clientSocket, buffer, bytesRead, 0);
-        } else if (bytesRead == 0) {
-            cout << "Client disconnected from [Thread " << this_thread::get_id() << "]" << endl;
-            break; 
-        } else {
-            cerr << "Error reading from client." << endl;
+        std::string response;
+        process_request(request, response);
+
+        if (!write_frame(client_fd, response)) {
             break;
         }
     }
-    
-    close(clientSocket);
+    close(client_fd);
 }
 
-void EchoServer::stop() {
-    if (serverFd != -1) {
-        close(serverFd);
-        serverFd = -1;
+bool Server::read_frame(int fd, std::string& payload) {
+    uint32_t len;
+    ssize_t n = read(fd, &len, sizeof(len));
+    if (n <= 0) return false;
+    if (n != sizeof(len)) return false;
+
+    len = __builtin_bswap32(len);
+    if (len > 16 * 1024 * 1024) {
+        std::cerr << "Frame too large: " << len << std::endl;
+        return false;
+    }
+
+    payload.resize(len);
+    size_t total = 0;
+    while (total < len) {
+        n = read(fd, &payload[total], len - total);
+        if (n <= 0) return false;
+        total += n;
+    }
+    return true;
+}
+
+bool Server::write_frame(int fd, const std::string& payload) {
+    uint32_t len = __builtin_bswap32(static_cast<uint32_t>(payload.size()));
+    if (write(fd, &len, sizeof(len)) != sizeof(len)) return false;
+    if (write(fd, payload.data(), payload.size()) != static_cast<ssize_t>(payload.size())) return false;
+    return true;
+}
+
+void Server::process_request(const std::string& request, std::string& response) {
+    try {
+        json req = json::parse(request);
+        std::string op = req.value("op", "");
+
+        if (op == "insert") {
+            std::string id = req["id"];
+            std::string text = req["text"];
+            std::vector<float> embedding = req["embedding"].get<std::vector<float>>();
+            json metadata = req.value("metadata", json::object());
+
+            storage_->insert(id, text, embedding, metadata);
+            response = R"({"status":"ok"})";
+
+        } else if (op == "search") {
+            std::vector<float> embedding = req["embedding"].get<std::vector<float>>();
+            size_t top_k = req.value("top_k", 10);
+            json filter = req.value("filter", json::object());
+
+            auto results = storage_->search(embedding, top_k, filter);
+
+            json resp;
+            resp["status"] = "ok";
+            json results_arr = json::array();
+            for (const auto& r : results) {
+                json item;
+                item["id"] = r.id;
+                item["text"] = r.text;
+                item["score"] = r.score;
+                item["metadata"] = r.metadata;
+                results_arr.push_back(std::move(item));
+            }
+            resp["results"] = std::move(results_arr);
+            response = resp.dump();
+
+        } else if (op == "delete") {
+            std::vector<std::string> ids = req["ids"].get<std::vector<std::string>>();
+            storage_->remove(ids);
+            response = R"({"status":"ok"})";
+
+        } else if (op == "health") {
+            auto health = storage_->health();
+            json resp;
+            resp["status"] = health.healthy ? "ok" : "error";
+            resp["healthy"] = health.healthy;
+            resp["message"] = health.message;
+            resp["total_chunks"] = health.total_chunks;
+            resp["latency_ms"] = health.latency.count();
+            response = resp.dump();
+
+        } else {
+            response = R"({"status":"error","code":"INVALID_ARG","message":"Unknown operation"})";
+        }
+
+    } catch (const std::exception& e) {
+        json resp;
+        resp["status"] = "error";
+        resp["code"] = "INTERNAL";
+        resp["message"] = e.what();
+        response = resp.dump();
     }
 }

@@ -1,32 +1,32 @@
 #ifndef SERVER_HPP
 #define SERVER_HPP
 
+#include "storage.hpp"
+#include "thread_pool.hpp"
 #include <string>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include "thread_pool.hpp" // Bring in the thread pool
+#include <cstdint>
+#include <functional>
 
-using namespace std;
-
-class EchoServer {
-private:
-    int port;
-    int serverFd;
-    ThreadPool pool; // Thread pool instance
-
+class Server {
 public:
-    EchoServer(int port);
-    ~EchoServer();
+    explicit Server(int port, StoragePtr storage);
+    ~Server();
 
-    void loadData();
-    bool setupSocket();
-    int getServerFd() const;
-    
-    // New method to pass the socket to the background workers
-    void enqueueClient(int clientSocket);
-    void handleClient(int clientSocket);
-    
+    bool start();
     void stop();
+
+private:
+    void run_accept_loop();
+    void handle_client(int client_fd);
+    bool read_frame(int fd, std::string& payload);
+    bool write_frame(int fd, const std::string& payload);
+    void process_request(const std::string& request, std::string& response);
+
+    int port_;
+    int server_fd_;
+    ThreadPool pool_;
+    StoragePtr storage_;
+    bool running_;
 };
 
 #endif

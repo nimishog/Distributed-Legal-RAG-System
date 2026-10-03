@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(VectorDatabaseNode VERSION 1.0 LANGUAGES CXX)
+project(Router VERSION 1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,7 +10,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 find_package(Threads REQUIRED)
-find_package(libpqxx REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 include(FetchContent)
 
@@ -20,13 +20,6 @@ FetchContent_Declare(
     GIT_TAG v3.11.2
 )
 FetchContent_MakeAvailable(nlohmann_json)
-
-FetchContent_Declare(
-    fmt
-    GIT_REPOSITORY https://github.com/fmtlib/fmt.git
-    GIT_TAG 10.2.1
-)
-FetchContent_MakeAvailable(fmt)
 
 FetchContent_Declare(
     googletest
@@ -39,34 +32,29 @@ enable_testing()
 
 set(SOURCES
     src/main.cpp
-    src/server.cpp
-    src/postgres_storage.cpp
-    src/vector_math.cpp
+    src/router.cpp
+    src/hash_ring.cpp
 )
 
-add_executable(database_server ${SOURCES})
-target_include_directories(database_server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(database_server PRIVATE
-    libpqxx
-    pq
+add_executable(router ${SOURCES})
+target_include_directories(router PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(router PRIVATE
     Threads::Threads
+    OpenSSL::SSL
+    OpenSSL::Crypto
     nlohmann_json::nlohmann_json
-    fmt::fmt
 )
 
 add_executable(run_tests
-    tests/test_vector_math.cpp
-    tests/test_storage.cpp
-    src/postgres_storage.cpp
-    src/vector_math.cpp
+    tests/test_hashing.cpp
+    src/hash_ring.cpp
 )
 target_include_directories(run_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(run_tests PRIVATE
     GTest::gtest_main
     Threads::Threads
-    libpqxx
-    pq
+    OpenSSL::SSL
+    OpenSSL::Crypto
     nlohmann_json::nlohmann_json
-    fmt::fmt
 )
-add_test(NAME DatabaseTests COMMAND run_tests)
+add_test(NAME RouterTests COMMAND run_tests)
