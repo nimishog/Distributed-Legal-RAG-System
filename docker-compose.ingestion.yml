@@ -38,12 +38,6 @@ services:
       - cpp_router
     # Run once and exit
     restart: "no"
-    deploy:
-      resources:
-        limits:
-          memory: 4G
-        reservations:
-          memory: 2G
 
   # Router needed for ingestion to load data
   cpp_router:

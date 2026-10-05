@@ -1,0 +1,21 @@
+# ==========================================
+# Local GPU Override for Data Ingestion
+# Auto-merged with docker-compose.ingestion.yml
+# Only used on local machines with NVIDIA GPU
+# ==========================================
+
+services:
+  ingestion:
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      # Force GPU for local development
+      EMBEDDING_DEVICE: cuda
