@@ -1,22 +1,26 @@
 # ==========================================
-# Multi-stage Dockerfile for cpp_database
-# Builder stage: compiles with all dev dependencies
-# Runtime stage: minimal distroless image
+# Dockerfile for cpp_database
+# Single stage - keep all deps for simplicity
 # ==========================================
 
-# ---- Builder Stage ----
-FROM ubuntu:22.04 AS builder
+FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Install everything needed
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     g++ \
     libpqxx-dev \
     libpq-dev \
+    libpqxx-6.4 \
+    libpq5 \
     ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    git \
+    python3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ldconfig
 
 WORKDIR /app
 
@@ -26,14 +30,9 @@ COPY src/ src/
 COPY tests/ tests/
 
 RUN mkdir build && cd build && \
-    cmake .. -DCMAKE_BUILD_TYPE=Release && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF && \
     make -j$(nproc) database_server
-
-# ---- Runtime Stage ----
-FROM gcr.io/distroless/cc-debian12:nonroot
-
-COPY --from=builder /app/build/database_server /database_server
 
 EXPOSE 8081
 
-ENTRYPOINT ["/database_server"]
+ENTRYPOINT ["/app/build/database_server"]

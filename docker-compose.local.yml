@@ -10,7 +10,7 @@ services:
       - ./init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U rag_user -d legal_rag"]
       interval: 5s
@@ -53,6 +53,7 @@ services:
       context: ./cpp_database
       dockerfile: Dockerfile
     container_name: legal-rag-db-1
+    entrypoint: ["/app/build/database_server"]
     environment:
       DB_HOST: postgres
       DB_PORT: 5432
@@ -77,6 +78,7 @@ services:
       context: ./cpp_database
       dockerfile: Dockerfile
     container_name: legal-rag-db-2
+    entrypoint: ["/app/build/database_server"]
     environment:
       DB_HOST: postgres
       DB_PORT: 5432

@@ -122,7 +122,6 @@ void PostgresStorage::remove(const std::vector<std::string>& ids) {
     auto conn = acquire();
     try {
         pqxx::work txn(*conn);
-        pqxx::array_parser parser;
         std::string array_str = "{";
         for (size_t i = 0; i < ids.size(); ++i) {
             if (i > 0) array_str += ",";

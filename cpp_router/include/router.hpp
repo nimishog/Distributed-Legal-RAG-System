@@ -40,6 +40,9 @@ private:
     bool ensure_connected(UpstreamConnection* conn);
     std::string forward_request(const std::string& request, const std::vector<Node>& targets);
 
+    std::string resolve_hostname(const std::string& hostname);
+    struct sockaddr_in create_sockaddr(const std::string& hostname, int port);
+
     int port_;
     int server_fd_;
     HashRing hash_ring_;

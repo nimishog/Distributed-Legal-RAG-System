@@ -10,7 +10,11 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 find_package(Threads REQUIRED)
-find_package(libpqxx REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBPQXX REQUIRED libpqxx)
+pkg_check_modules(LIBPQ REQUIRED libpq)
+
+option(BUILD_TESTS "Build unit tests" ON)
 
 include(FetchContent)
 
@@ -28,14 +32,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(fmt)
 
-FetchContent_Declare(
-    googletest
-    URL https://github.com/google/googletest/archive/609281088cfefc76f9d0ce82e1ff6c30cc3591e5.zip
-)
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)
-
-enable_testing()
+if(BUILD_TESTS)
+    FetchContent_Declare(
+        googletest
+        URL https://github.com/google/googletest/archive/609281088cfefc76f9d0ce82e1ff6c30cc3591e5.zip
+    )
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+    enable_testing()
+endif()
 
 set(SOURCES
     src/main.cpp
@@ -47,26 +52,32 @@ set(SOURCES
 add_executable(database_server ${SOURCES})
 target_include_directories(database_server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(database_server PRIVATE
-    libpqxx
-    pq
+    ${LIBPQXX_LIBRARIES}
+    ${LIBPQ_LIBRARIES}
     Threads::Threads
     nlohmann_json::nlohmann_json
     fmt::fmt
 )
+target_include_directories(database_server PRIVATE ${LIBPQXX_INCLUDE_DIRS} ${LIBPQ_INCLUDE_DIRS})
+target_compile_options(database_server PRIVATE ${LIBPQXX_CFLAGS_OTHER} ${LIBPQ_CFLAGS_OTHER})
 
-add_executable(run_tests
-    tests/test_vector_math.cpp
-    tests/test_storage.cpp
-    src/postgres_storage.cpp
-    src/vector_math.cpp
-)
-target_include_directories(run_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(run_tests PRIVATE
-    GTest::gtest_main
-    Threads::Threads
-    libpqxx
-    pq
-    nlohmann_json::nlohmann_json
-    fmt::fmt
-)
-add_test(NAME DatabaseTests COMMAND run_tests)
+if(BUILD_TESTS)
+    add_executable(run_tests
+        tests/test_vector_math.cpp
+        tests/test_storage.cpp
+        src/postgres_storage.cpp
+        src/vector_math.cpp
+    )
+    target_include_directories(run_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(run_tests PRIVATE
+        GTest::gtest_main
+        Threads::Threads
+        ${LIBPQXX_LIBRARIES}
+        ${LIBPQ_LIBRARIES}
+        nlohmann_json::nlohmann_json
+        fmt::fmt
+    )
+    target_include_directories(run_tests PRIVATE ${LIBPQXX_INCLUDE_DIRS} ${LIBPQ_INCLUDE_DIRS})
+    target_compile_options(run_tests PRIVATE ${LIBPQXX_CFLAGS_OTHER} ${LIBPQ_CFLAGS_OTHER})
+    add_test(NAME DatabaseTests COMMAND run_tests)
+endif()

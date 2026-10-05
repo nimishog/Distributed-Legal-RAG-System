@@ -2,6 +2,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <unistd.h>
 #include <cstring>
 #include <iostream>
@@ -78,10 +79,12 @@ void Router::health_check_loop() {
             int fd = socket(AF_INET, SOCK_STREAM, 0);
             if (fd < 0) continue;
 
-            sockaddr_in addr{};
-            addr.sin_family = AF_INET;
-            addr.sin_port = htons(node.port);
-            inet_pton(AF_INET, node.host.c_str(), &addr.sin_addr);
+            sockaddr_in addr = create_sockaddr(node.host, node.port);
+            if (addr.sin_addr.s_addr == 0) {
+                close(fd);
+                hash_ring_.mark_healthy(node.id, false);
+                continue;
+            }
 
             struct timeval tv{2, 0};
             setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
@@ -133,7 +136,7 @@ void Router::run_accept_loop() {
     }
 }
 
-Router::UpstreamConnection* Router::acquire_connection(const Node& node) {
+UpstreamConnection* Router::acquire_connection(const Node& node) {
     std::lock_guard<std::mutex> lock(pool_mutex_);
     auto& pool = connection_pools_[node.id];
     for (auto& conn : pool) {
@@ -186,10 +189,12 @@ bool Router::ensure_connected(UpstreamConnection* conn) {
     int opt = 1;
     setsockopt(conn->fd, SOL_SOCKET, SO_KEEPALIVE, &opt, sizeof(opt));
 
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(target.port);
-    inet_pton(AF_INET, target.host.c_str(), &addr.sin_addr);
+    sockaddr_in addr = create_sockaddr(target.host, target.port);
+    if (addr.sin_addr.s_addr == 0) {
+        close(conn->fd);
+        conn->fd = -1;
+        return false;
+    }
 
     struct timeval tv{5, 0};
     setsockopt(conn->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
@@ -284,4 +289,36 @@ void Router::handle_client(int client_fd) {
         write_frame(client_fd, response);
     }
     close(client_fd);
+}
+
+std::string Router::resolve_hostname(const std::string& hostname) {
+    struct addrinfo hints{}, *res;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_ADDRCONFIG;
+
+    int result = getaddrinfo(hostname.c_str(), nullptr, &hints, &res);
+    if (result != 0 || !res) {
+        return "";
+    }
+
+    char ip[INET_ADDRSTRLEN];
+    const struct sockaddr_in* addr = reinterpret_cast<const struct sockaddr_in*>(res->ai_addr);
+    inet_ntop(AF_INET, &addr->sin_addr, ip, INET_ADDRSTRLEN);
+    freeaddrinfo(res);
+    return std::string(ip);
+}
+
+struct sockaddr_in Router::create_sockaddr(const std::string& hostname, int port) {
+    struct sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+
+    std::string ip = resolve_hostname(hostname);
+    if (ip.empty()) {
+        return addr;
+    }
+
+    inet_pton(AF_INET, ip.c_str(), &addr.sin_addr);
+    return addr;
 }

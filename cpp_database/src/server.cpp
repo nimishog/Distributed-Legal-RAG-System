@@ -80,19 +80,28 @@ void Server::run_accept_loop() {
 }
 
 void Server::handle_client(int client_fd) {
+    std::cerr << "[DEBUG] New client connected, fd=" << client_fd << std::endl;
     while (running_) {
         std::string request;
+        std::cerr << "[DEBUG] Reading frame..." << std::endl;
         if (!read_frame(client_fd, request)) {
+            std::cerr << "[DEBUG] read_frame returned false" << std::endl;
             break;
         }
+        std::cerr << "[DEBUG] Read request: " << request << std::endl;
 
         std::string response;
+        std::cerr << "[DEBUG] Processing request..." << std::endl;
         process_request(request, response);
+        std::cerr << "[DEBUG] Processed request, response size: " << response.size() << std::endl;
 
         if (!write_frame(client_fd, response)) {
+            std::cerr << "[DEBUG] write_frame failed" << std::endl;
             break;
         }
+        std::cerr << "[DEBUG] Response sent" << std::endl;
     }
+    std::cerr << "[DEBUG] Closing client connection" << std::endl;
     close(client_fd);
 }
 

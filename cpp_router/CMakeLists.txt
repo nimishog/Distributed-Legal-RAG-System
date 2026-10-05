@@ -10,7 +10,10 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 find_package(Threads REQUIRED)
-find_package(OpenSSL REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(OPENSSL REQUIRED openssl)
+
+option(BUILD_TESTS "Build unit tests" ON)
 
 include(FetchContent)
 
@@ -21,14 +24,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
-FetchContent_Declare(
-    googletest
-    URL https://github.com/google/googletest/archive/609281088cfefc76f9d0ce82e1ff6c30cc3591e5.zip
-)
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)
-
-enable_testing()
+if(BUILD_TESTS)
+    FetchContent_Declare(
+        googletest
+        URL https://github.com/google/googletest/archive/609281088cfefc76f9d0ce82e1ff6c30cc3591e5.zip
+    )
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+    enable_testing()
+endif()
 
 set(SOURCES
     src/main.cpp
@@ -40,21 +44,25 @@ add_executable(router ${SOURCES})
 target_include_directories(router PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(router PRIVATE
     Threads::Threads
-    OpenSSL::SSL
-    OpenSSL::Crypto
+    ${OPENSSL_LIBRARIES}
     nlohmann_json::nlohmann_json
 )
+target_include_directories(router PRIVATE ${OPENSSL_INCLUDE_DIRS})
+target_compile_options(router PRIVATE ${OPENSSL_CFLAGS_OTHER})
 
-add_executable(run_tests
-    tests/test_hashing.cpp
-    src/hash_ring.cpp
-)
-target_include_directories(run_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(run_tests PRIVATE
-    GTest::gtest_main
-    Threads::Threads
-    OpenSSL::SSL
-    OpenSSL::Crypto
-    nlohmann_json::nlohmann_json
-)
-add_test(NAME RouterTests COMMAND run_tests)
+if(BUILD_TESTS)
+    add_executable(run_tests
+        tests/test_hashing.cpp
+        src/hash_ring.cpp
+    )
+    target_include_directories(run_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(run_tests PRIVATE
+        GTest::gtest_main
+        Threads::Threads
+        ${OPENSSL_LIBRARIES}
+        nlohmann_json::nlohmann_json
+    )
+    target_include_directories(run_tests PRIVATE ${OPENSSL_INCLUDE_DIRS})
+    target_compile_options(run_tests PRIVATE ${OPENSSL_CFLAGS_OTHER})
+    add_test(NAME RouterTests COMMAND run_tests)
+endif()
