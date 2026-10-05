@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     git \
     python3 \
+    netcat-openbsd \
     && rm -rf /var/lib/apt/lists/* \
     && ldconfig
 

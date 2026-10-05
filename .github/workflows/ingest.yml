@@ -1,0 +1,85 @@
+name: Data Ingestion
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_chunks:
+        description: 'Maximum chunks to ingest'
+        required: false
+        default: '1000'
+        type: string
+      target:
+        description: 'Target environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+env:
+  REGION: ap-south-1
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com
+
+jobs:
+  ingest:
+    name: Run Data Ingestion Pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Pull Latest Images
+        run: |
+          docker pull $ECR_REGISTRY/cpp_router:latest
+          docker pull $ECR_REGISTRY/cpp_database:latest
+          docker pull $ECR_REGISTRY/data_ingestion:latest
+
+      - name: Run Ingestion (Production)
+        if: github.event.inputs.target == 'production'
+        env:
+          ROUTER_HOST: ${{ secrets.PROD_ROUTER_HOST }}
+          ROUTER_PORT: 8080
+          MAX_INGESTION_CHUNKS: ${{ github.event.inputs.max_chunks }}
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          docker compose -f docker-compose.ingestion.yml up --build --abort-on-container-exit \
+            -e ROUTER_HOST=$ROUTER_HOST \
+            -e ROUTER_PORT=$ROUTER_PORT \
+            -e MAX_INGESTION_CHUNKS=$MAX_INGESTION_CHUNKS \
+            -e KAGGLE_USERNAME=$KAGGLE_USERNAME \
+            -e KAGGLE_KEY=$KAGGLE_KEY \
+            -e DB_PASSWORD=$DB_PASSWORD
+
+      - name: Run Ingestion (Staging)
+        if: github.event.inputs.target == 'staging'
+        env:
+          ROUTER_HOST: localhost
+          ROUTER_PORT: 8080
+          MAX_INGESTION_CHUNKS: ${{ github.event.inputs.max_chunks }}
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          DB_PASSWORD: localdev
+        run: |
+          docker compose -f docker-compose.ingestion.yml up --build --abort-on-container-exit
+
+      - name: Verify Ingestion
+        run: |
+          sleep 10
+          # Test search
+          curl -X POST $API_URL/api/ask \
+            -H "Content-Type: application/json" \
+            -d '{"question": "What is a contract?", "top_k": 3}' | jq .

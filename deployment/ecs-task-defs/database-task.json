@@ -1,0 +1,49 @@
+{
+  "family": "legal-rag-database",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/legal-rag-ecs-execution-role",
+  "taskRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/legal-rag-ecs-task-role",
+  "containerDefinitions": [
+    {
+      "name": "cpp_database",
+      "image": "${AWS_ACCOUNT_ID}.dkr.ecr.ap-south-1.amazonaws.com/cpp_database:${IMAGE_TAG}",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8081,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {"name": "DB_HOST", "value": "${DB_HOST}"},
+        {"name": "DB_PORT", "value": "5432"},
+        {"name": "DB_NAME", "value": "legal_rag"},
+        {"name": "DB_USER", "value": "rag_user"},
+        {"name": "DB_PASSWORD", "value": "${DB_PASSWORD}"},
+        {"name": "DB_SHARD_ID", "value": "${SHARD_ID}"},
+        {"name": "SERVER_PORT", "value": "8081"}
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/legal-rag-database",
+          "awslogs-region": "ap-south-1",
+          "awslogs-stream-prefix": "database"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "nc -z localhost 8081"],
+        "interval": 30,
+        "timeout": 10,
+        "retries": 3,
+        "startPeriod": 30
+      },
+      "ulimits": [
+        {"name": "nofile", "softLimit": 65536, "hardLimit": 65536}
+      ]
+    }
+  ]
+}

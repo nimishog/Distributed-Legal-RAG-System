@@ -1,0 +1,44 @@
+{
+  "family": "legal-rag-router",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/legal-rag-ecs-execution-role",
+  "taskRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/legal-rag-ecs-task-role",
+  "containerDefinitions": [
+    {
+      "name": "cpp_router",
+      "image": "${AWS_ACCOUNT_ID}.dkr.ecr.ap-south-1.amazonaws.com/cpp_router:${IMAGE_TAG}",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {"name": "DB_NODES", "value": "legal-rag-db-0:8081,legal-rag-db-1:8081,legal-rag-db-2:8081"},
+        {"name": "ROUTER_PORT", "value": "8080"}
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/legal-rag-router",
+          "awslogs-region": "ap-south-1",
+          "awslogs-stream-prefix": "router"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "nc -z localhost 8080"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 15
+      },
+      "ulimits": [
+        {"name": "nofile", "softLimit": 65536, "hardLimit": 65536}
+      ]
+    }
+  ]
+}

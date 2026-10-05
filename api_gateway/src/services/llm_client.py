@@ -3,9 +3,10 @@ import logging
 from typing import List, Optional
 from dataclasses import dataclass
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, RateLimitError, APIConnectionError, APITimeoutError, InternalServerError
 from ..config import get_settings
 from ..schemas.models import Citation, SearchResult
+from ..utils.retry import async_retry_with_backoff, get_circuit_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,9 @@ Context:
 Question: {question}
 
 Answer with citations [1], [2]..."""
+
+
+_llm_circuit_breaker = get_circuit_breaker("api_gateway", "llm")
 
 
 class LLMClient:
@@ -95,6 +99,24 @@ class LLMClient:
                 )
         return citations
 
+    @async_retry_with_backoff(
+        max_retries=3,
+        base_delay=1.0,
+        max_delay=60.0,
+        exponential_base=2.0,
+        jitter=True,
+        retryable_exceptions=(
+            RateLimitError,
+            APIConnectionError,
+            APITimeoutError,
+            InternalServerError,
+            ConnectionError,
+            TimeoutError,
+        ),
+        circuit_breaker=_llm_circuit_breaker,
+        component="api_gateway",
+        operation="llm_generate",
+    )
     async def generate_answer(
         self,
         question: str,

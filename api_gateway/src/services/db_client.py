@@ -6,6 +6,7 @@ from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 
 from ..config import get_settings
+from ..utils.retry import async_retry_with_backoff, get_circuit_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,9 @@ class RouterConnection:
 
     async def wait_closed(self):
         await self.writer.wait_closed()
+
+
+_router_circuit_breaker = get_circuit_breaker("api_gateway", "router")
 
 
 class RouterClient:
@@ -133,6 +137,17 @@ class RouterClient:
         conn.last_used = asyncio.get_event_loop().time()
         await self._pool.put(conn)
 
+    @async_retry_with_backoff(
+        max_retries=3,
+        base_delay=1.0,
+        max_delay=30.0,
+        exponential_base=2.0,
+        jitter=True,
+        retryable_exceptions=(ConnectionError, TimeoutError, OSError, IOError),
+        circuit_breaker=_router_circuit_breaker,
+        component="api_gateway",
+        operation="search",
+    )
     async def search(
         self,
         embedding: List[float],

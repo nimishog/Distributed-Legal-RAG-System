@@ -1,0 +1,187 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGION: ap-south-1
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com
+  PROJECT: legal-rag
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Images
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and Push cpp_router
+        working-directory: ./cpp_router
+        run: |
+          docker build -t $ECR_REGISTRY/cpp_router:${{ github.sha }} .
+          docker push $ECR_REGISTRY/cpp_router:${{ github.sha }}
+
+      - name: Build and Push cpp_database
+        working-directory: ./cpp_database
+        run: |
+          docker build -t $ECR_REGISTRY/cpp_database:${{ github.sha }} .
+          docker push $ECR_REGISTRY/cpp_database:${{ github.sha }}
+
+      - name: Build and Push api_gateway
+        working-directory: ./api_gateway
+        run: |
+          docker build -t $ECR_REGISTRY/api_gateway:${{ github.sha }} .
+          docker push $ECR_REGISTRY/api_gateway:${{ github.sha }}
+
+      - name: Build and Push frontend (optional, for local preview)
+        working-directory: ./frontend
+        run: |
+          docker build -t $ECR_REGISTRY/frontend:${{ github.sha }} .
+          docker push $ECR_REGISTRY/frontend:${{ github.sha }}
+
+  deploy-ec2:
+    name: Deploy to EC2 (nginx + API Gateway)
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Deploy to EC2 via SSH
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          IMAGE_TAG: ${{ github.sha }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          echo "$EC2_SSH_KEY" > /tmp/ec2_key
+          chmod 600 /tmp/ec2_key
+          
+          ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key ec2-user@$EC2_HOST << 'EOF'
+            cd /home/ec2-user/legal-rag || git clone https://github.com/${{ github.repository }}.git legal-rag && cd legal-rag
+            
+            # Update images in docker-compose.prod.yml
+            sed -i "s|IMAGE_TAG:.*|IMAGE_TAG:${IMAGE_TAG}|" docker-compose.prod.yml
+            
+            # Pull new images
+            docker compose -f docker-compose.prod.yml pull
+            
+            # Restart services
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+            
+            # Wait for health
+            sleep 30
+            curl -sf http://localhost/health || exit 1
+            
+            echo "EC2 deployment successful"
+          EOF
+
+  deploy-ecs:
+    name: Deploy to ECS Fargate (Router + Database)
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Update ECS Task Definitions
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          # Update router task definition
+          sed -i "s|\${AWS_ACCOUNT_ID}|$AWS_ACCOUNT_ID|g; s|\${IMAGE_TAG}|$IMAGE_TAG|g" deployment/ecs-task-defs/router-task.json
+          
+          # Update database task definition (3 shards)
+          for shard in 0 1 2; do
+            sed -i "s|\${AWS_ACCOUNT_ID}|$AWS_ACCOUNT_ID|g; s|\${IMAGE_TAG}|$IMAGE_TAG|g; s|\${SHARD_ID}|$shard|g; s|\${DB_HOST}|$DB_HOST|g; s|\${DB_PASSWORD}|$DB_PASSWORD|g" deployment/ecs-task-defs/database-task.json
+            aws ecs register-task-definition --cli-input-json file://deployment/ecs-task-defs/database-task.json --region $REGION
+          done
+          
+          # Register router task
+          aws ecs register-task-definition --cli-input-json file://deployment/ecs-task-defs/router-task.json --region $REGION
+
+      - name: Update ECS Services
+        run: |
+          # Update router service
+          aws ecs update-service \
+            --cluster legal-rag-cluster \
+            --service legal-rag-router \
+            --task-definition legal-rag-router \
+            --force-new-deployment \
+            --region $REGION
+          
+          # Update database services (3 shards)
+          for shard in 0 1 2; do
+            aws ecs update-service \
+              --cluster legal-rag-cluster \
+              --service legal-rag-db-$shard \
+              --task-definition legal-rag-database \
+              --force-new-deployment \
+              --region $REGION
+          done
+
+      - name: Wait for ECS Deployments
+        run: |
+          aws ecs wait services-stable \
+            --cluster legal-rag-cluster \
+            --services legal-rag-router legal-rag-db-0 legal-rag-db-1 legal-rag-db-2 \
+            --region $REGION
+          echo "ECS deployment complete"
+
+  post-deploy:
+    name: Post-Deploy Verification
+    needs: [deploy-ec2, deploy-ecs]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Verify Production Health
+        env:
+          PROD_URL: https://nimish-legal-rag.duckdns.org
+        run: |
+          sleep 60  # Wait for all services to stabilize
+          curl -sf $PROD_URL/health | jq .
+          curl -sf $PROD_URL/system-health | jq .
+          
+      - name: Run Integration Tests
+        env:
+          API_URL: https://nimish-legal-rag.duckdns.org
+        run: |
+          pip install -r deployment/integration_tests/requirements.txt
+          python -m pytest deployment/integration_tests/test_e2e_flow.py -v

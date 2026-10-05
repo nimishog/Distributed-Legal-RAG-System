@@ -1,0 +1,121 @@
+name: Load Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'Target URL for load testing'
+        required: true
+        default: 'https://nimish-legal-rag.duckdns.org'
+        type: string
+      scenario:
+        description: 'Load test scenario'
+        required: false
+        default: 'ramp_10k'
+        type: choice
+        options:
+          - ramp_10k
+          - spike_test
+          - stress_test
+          - soak_test
+      vus:
+        description: 'Max virtual users (for ramp_10k)'
+        required: false
+        default: '10000'
+        type: string
+
+env:
+  K6_VERSION: "0.53.0"
+
+jobs:
+  load-test:
+    name: Run k6 Load Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install k6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y k6
+
+      - name: Run k6 Load Test
+        env:
+          BASE_URL: ${{ github.event.inputs.target_url }}
+          SCENARIO: ${{ github.event.inputs.scenario }}
+        run: |
+          k6 run \
+            --out json=load-test-results.json \
+            -e BASE_URL=$BASE_URL \
+            -e SCENARIO=$SCENARIO \
+            k6-load-test.js
+
+      - name: Upload Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-load-test-results
+          path: load-test-results.json
+          retention-days: 30
+
+      - name: Parse and Comment Results
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          # Extract key metrics
+          cat load-test-results.json | jq -s '
+            .[] | select(.type == "Point") | 
+            select(.metric == "http_req_duration" or .metric == "http_req_failed" or .metric == "checks") |
+            {metric: .metric, value: .data.value, tags: .data.tags}
+          ' > metrics.json
+          
+          # Create summary
+          echo "## k6 Load Test Results" > summary.md
+          echo "" >> summary.md
+          echo "**Target:** ${{ github.event.inputs.target_url }}" >> summary.md
+          echo "**Scenario:** ${{ github.event.inputs.scenario }}" >> summary.md
+          echo "**Max VUs:** ${{ github.event.inputs.vus }}" >> summary.md
+          echo "" >> summary.md
+          echo "| Metric | Value |" >> summary.md
+          echo "|--------|-------|" >> summary.md
+          
+          # HTTP Request Duration
+          p95=$(cat metrics.json | jq -s 'map(select(.metric=="http_req_duration" and .tags.expected_response=="true")) | map(.value) | sort | .[length*95/100|floor]')
+          echo "| HTTP p95 Duration | ${p95}ms |" >> summary.md
+          
+          # Error Rate
+          error_rate=$(cat metrics.json | jq -s 'map(select(.metric=="http_req_failed")) | map(.value) | add / length * 100')
+          echo "| HTTP Error Rate | ${error_rate}% |" >> summary.md
+          
+          # Checks Pass Rate
+          checks_pass=$(cat metrics.json | jq -s 'map(select(.metric=="checks")) | map(.value) | add / length * 100')
+          echo "| Checks Pass Rate | ${checks_pass}% |" >> summary.md
+          
+          cat summary.md
+          
+          # Post as workflow summary
+          cat summary.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Fail on Thresholds
+        run: |
+          # Check if thresholds were met
+          p95=$(cat metrics.json | jq -s 'map(select(.metric=="http_req_duration" and .tags.expected_response=="true")) | map(.value) | sort | .[length*95/100|floor]')
+          error_rate=$(cat metrics.json | jq -s 'map(select(.metric=="http_req_failed")) | map(.value) | add / length * 100')
+          
+          echo "p95: ${p95}ms, error_rate: ${error_rate}%"
+          
+          # Fail if p95 > 5s or error rate > 20%
+          if (( $(echo "$p95 > 5000" | bc -l) )); then
+            echo "::error::p95 latency ${p95}ms exceeds 5000ms threshold"
+            exit 1
+          fi
+          
+          if (( $(echo "$error_rate > 20" | bc -l) )); then
+            echo "::error::Error rate ${error_rate}% exceeds 20% threshold"
+            exit 1
+          fi
+          
+          echo "All thresholds passed"

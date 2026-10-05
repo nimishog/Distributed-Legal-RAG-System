@@ -2,12 +2,13 @@ import time
 import logging
 import asyncio
 from fastapi import APIRouter, HTTPException, Request, Depends
-from prometheus_client import Histogram, Counter
+from prometheus_client import Histogram, Counter, Gauge
 
 from ..config import get_settings
 from ..schemas.models import AskRequest, AskResponse
 from ..services.db_client import RouterClient
 from ..services.llm_client import LLMClient
+from ..utils.retry import CircuitBreakerOpenError
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,24 @@ PROMPT_TOKENS = Counter(
 COMPLETION_TOKENS = Counter(
     "api_gateway_llm_completion_tokens_total",
     "Total completion tokens",
+)
+
+RETRY_COUNT = Counter(
+    "api_gateway_retry_attempts_total",
+    "Total retry attempts from downstream services",
+    ["component", "operation", "result"],
+)
+
+CIRCUIT_BREAKER_STATE = Gauge(
+    "api_gateway_circuit_breaker_state",
+    "Circuit breaker state (0=closed, 1=open, 2=half-open)",
+    ["component", "operation"],
+)
+
+CIRCUIT_BREAKER_FAILURES = Counter(
+    "api_gateway_circuit_breaker_failures_total",
+    "Total failures counted by circuit breaker",
+    ["component", "operation"],
 )
 
 _router_client: RouterClient = None
@@ -117,14 +136,27 @@ async def ask_question(
                 model=settings.openai_model,
             )
 
+        except CircuitBreakerOpenError as e:
+            REQUEST_COUNT.labels(endpoint="/ask", status="circuit_open").inc()
+            CIRCUIT_BREAKER_STATE.labels(
+                component=e.component, operation=e.operation
+            ).set(1)
+            logger.error(f"Circuit breaker open for {e.component}.{e.operation}")
+            if "router" in e.operation:
+                raise HTTPException(status_code=503, detail="Search service temporarily unavailable (circuit open)")
+            else:
+                raise HTTPException(status_code=503, detail="LLM service temporarily unavailable (circuit open)")
+
         except ConnectionError as e:
             REQUEST_COUNT.labels(endpoint="/ask", status="router_error").inc()
             logger.error(f"Router connection error: {e}")
             raise HTTPException(status_code=503, detail="Search service unavailable")
+
         except RuntimeError as e:
             REQUEST_COUNT.labels(endpoint="/ask", status="llm_error").inc()
             logger.error(f"LLM error: {e}")
             raise HTTPException(status_code=503, detail="LLM service unavailable")
+
         except Exception as e:
             REQUEST_COUNT.labels(endpoint="/ask", status="internal_error").inc()
             logger.error(f"Internal error: {e}")
