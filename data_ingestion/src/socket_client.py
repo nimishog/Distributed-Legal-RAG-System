@@ -5,7 +5,7 @@ import struct
 from pathlib import Path
 from typing import List, Dict, Any
 
-from ..utils.retry import retry_with_backoff, get_circuit_breaker
+from src.utils.retry import retry_with_backoff, get_circuit_breaker
 
 ROUTER_HOST = os.getenv("ROUTER_HOST", "cpp_router")
 ROUTER_PORT = int(os.getenv("ROUTER_PORT", "8080"))
