@@ -38,13 +38,22 @@ def main():
     texts = [c["text"] for c in chunks]
 
     print(f"Embedding {len(texts)} texts in batches of {BATCH_SIZE}...")
-    embeddings = model.encode(
-        texts,
-        batch_size=BATCH_SIZE,
-        show_progress_bar=True,
-        convert_to_numpy=True,
-        normalize_embeddings=True
-    )
+    embeddings = []
+    for i in range(0, len(texts), BATCH_SIZE):
+        batch = texts[i:i + BATCH_SIZE]
+        batch_embeddings = model.encode(
+            batch,
+            batch_size=BATCH_SIZE,
+            show_progress_bar=False,
+            convert_to_numpy=True,
+            normalize_embeddings=True
+        )
+        embeddings.append(batch_embeddings)
+        if device == "cuda":
+            torch.cuda.empty_cache()
+        if (i // BATCH_SIZE + 1) % 10 == 0:
+            print(f"  Processed {i + len(batch)} / {len(texts)} texts")
+    embeddings = np.vstack(embeddings)
 
     for i, chunk in enumerate(chunks):
         chunk["embedding"] = embeddings[i].tolist()
