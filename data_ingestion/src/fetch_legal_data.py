@@ -1,6 +1,5 @@
 import os
 import json
-import kagglehub
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -8,24 +7,76 @@ DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
 MAX_CHUNKS = int(os.getenv("MAX_INGESTION_CHUNKS", "1000"))
 
 def fetch_legalbench() -> List[Dict[str, Any]]:
-    """Download LegalBench-RAG-mini from Kaggle."""
-    print("Downloading LegalBench-RAG-mini from Kaggle...")
-    path = kagglehub.dataset_download("nguha/legalbench-rag-mini")
-    print(f"Downloaded to: {path}")
-
-    documents = []
-    data_path = Path(path)
-
-    for file_path in data_path.rglob("*.json"):
-        with open(file_path) as f:
-            data = json.load(f)
-            if isinstance(data, list):
-                documents.extend(data)
-            elif isinstance(data, dict):
-                documents.append(data)
-
-    print(f"Loaded {len(documents)} raw documents")
-    return documents[:MAX_CHUNKS]
+    """Download LegalBench from HuggingFace datasets."""
+    print("Downloading LegalBench from HuggingFace...")
+    try:
+        from datasets import load_dataset
+        
+        # Load LegalBench RAG subset (or full dataset)
+        # LegalBench has multiple subsets; 'rag' is designed for RAG tasks
+        dataset = load_dataset("nguha/legalbench", "rag", split="train")
+        print(f"Loaded LegalBench RAG subset: {len(dataset)} examples")
+        
+        documents = []
+        for example in dataset:
+            # LegalBench RAG format typically has: question, answer, context, etc.
+            # We'll use the context as the document text
+            text = example.get("context", "") or example.get("passage", "") or example.get("text", "")
+            question = example.get("question", "")
+            answer = example.get("answer", "")
+            
+            if not text and question:
+                text = f"Question: {question}\nAnswer: {answer}"
+            
+            if text:
+                documents.append({
+                    "text": text,
+                    "metadata": {
+                        "source": "legalbench",
+                        "task": example.get("task", "unknown"),
+                        "question": question,
+                        "answer": answer,
+                        "subset": "rag"
+                    }
+                })
+        
+        print(f"Loaded {len(documents)} documents from LegalBench RAG")
+        return documents[:MAX_CHUNKS]
+        
+    except Exception as e:
+        print(f"Failed to load LegalBench RAG subset: {e}")
+        print("Trying full LegalBench dataset...")
+        try:
+            from datasets import load_dataset
+            dataset = load_dataset("nguha/legalbench", split="train")
+            print(f"Loaded full LegalBench: {len(dataset)} examples")
+            
+            documents = []
+            for example in dataset:
+                text = example.get("context", "") or example.get("passage", "") or example.get("text", "")
+                question = example.get("question", "")
+                answer = example.get("answer", "")
+                
+                if not text and question:
+                    text = f"Question: {question}\nAnswer: {answer}"
+                
+                if text:
+                    documents.append({
+                        "text": text,
+                        "metadata": {
+                            "source": "legalbench",
+                            "task": example.get("task", "unknown"),
+                            "question": question,
+                            "answer": answer
+                        }
+                    })
+            
+            print(f"Loaded {len(documents)} documents from full LegalBench")
+            return documents[:MAX_CHUNKS]
+            
+        except Exception as e2:
+            print(f"Failed to load full LegalBench: {e2}")
+            raise
 
 def fetch_local_fallback() -> List[Dict[str, Any]]:
     """Fallback: create sample legal documents for local testing."""
@@ -72,7 +123,7 @@ def fetch_local_fallback() -> List[Dict[str, Any]]:
             "metadata": {"source": "FRCP_56", "jurisdiction": "federal", "topic": "civil_procedure"}
         }
     ]
-    return samples * (MAX_CHUNKS // len(samples) + 1)[:MAX_CHUNKS]
+    return (samples * (MAX_CHUNKS // len(samples) + 1))[:MAX_CHUNKS]
 
 def main():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -80,7 +131,7 @@ def main():
     try:
         documents = fetch_legalbench()
     except Exception as e:
-        print(f"Kaggle download failed: {e}. Using fallback.")
+        print(f"Failed to load LegalBench: {e}. Using fallback.")
         documents = fetch_local_fallback()
 
     output_file = DATA_DIR / "raw_documents.json"

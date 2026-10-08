@@ -141,7 +141,7 @@ services:
       POSTGRES_WORK_MEM: 16MB
       POSTGRES_MAINTENANCE_WORK_MEM: 64MB
     volumes:
-      - ../init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
+      - ./init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
       - pgdata-ingest:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U rag_user -d legal_rag"]
