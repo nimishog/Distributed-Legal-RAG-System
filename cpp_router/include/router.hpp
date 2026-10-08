@@ -50,7 +50,7 @@ private:
 
     std::mutex pool_mutex_;
     std::unordered_map<std::string, std::vector<std::unique_ptr<UpstreamConnection>>> connection_pools_;
-    const size_t pool_size_per_node_ = 8;
+    size_t pool_size_per_node_;
 
     std::thread health_thread_;
     const std::chrono::seconds health_interval_{10};

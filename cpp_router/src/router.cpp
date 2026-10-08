@@ -15,6 +15,8 @@ using json = nlohmann::json;
 
 Router::Router(int port, const std::vector<Node>& nodes)
     : port_(port), server_fd_(-1), running_(false) {
+    const char* pool_size_env = std::getenv("ROUTER_POOL_SIZE");
+    pool_size_per_node_ = pool_size_env ? std::stoul(pool_size_env) : 8;
     for (const auto& node : nodes) {
         hash_ring_.add_node(node.id, node.host, node.port);
     }

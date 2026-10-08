@@ -1,0 +1,39 @@
+# ==========================================
+# Local Test Overrides for docker-compose.local.yml
+# Use with: docker-compose -f docker-compose.local.yml -f docker-compose.local.override.yml
+# Increases resources for 10k VU stress test
+# ==========================================
+
+services:
+  api_gateway:
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+    environment:
+      ROUTER_POOL_SIZE: 16
+      RATE_LIMIT_CONCURRENT: 50
+
+  cpp_router:
+    environment:
+      ROUTER_POOL_SIZE: 16
+
+  cpp_database_0:
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  cpp_database_1:
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  cpp_database_2:
+    deploy:
+      resources:
+        limits:
+          memory: 1G
