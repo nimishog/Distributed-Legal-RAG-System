@@ -135,7 +135,7 @@ def main():
         documents = fetch_local_fallback()
 
     output_file = DATA_DIR / "raw_documents.json"
-    with open(output_file, "w") as f:
+    with open(output_file, "w", encoding="utf-8") as f:
         json.dump(documents, f, indent=2)
 
     print(f"Saved {len(documents)} documents to {output_file}")

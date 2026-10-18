@@ -1,7 +1,16 @@
 # ==========================================
 # Production Deployment - Single EC2 t3.micro
-# All services on one host with memory limits and swap
-# Usage: docker compose -f docker-compose.prod.yml up -d
+# All services on one host with memory limits and swap.
+#
+# Secrets are file-based (no Swarm required). Create them on the host with:
+#   mkdir -p secrets && chmod 700 secrets
+#   printf '%s' "$DB_PASSWORD"      > secrets/DB_PASSWORD
+#   printf '%s' "$OPENAI_API_KEY"   > secrets/openai_api_key
+#   printf '%s' "$API_KEY"          > secrets/api_key   # optional
+#
+# Memory budget: nginx 50M + api 400M + postgres 300M + router 100M
+#                + 3 x db 64M + certbot 30M ~= 1.07 GB of limits against
+#                1 GB RAM; the 2 GB swap file absorbs transient peaks.
 # ==========================================
 
 services:
@@ -34,14 +43,20 @@ services:
     image: ghcr.io/${GITHUB_REPOSITORY:-local}/api_gateway:${IMAGE_TAG:-latest}
     container_name: legal-rag-api
     environment:
-      ROUTER_HOST: localhost
+      ROUTER_HOST: cpp_router
       ROUTER_PORT: 8080
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
       ROUTER_POOL_SIZE: 2
       API_HOST: 0.0.0.0
       API_PORT: 8000
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    # No exposed ports - nginx proxies
+      # Read from .env on the EC2 host so the Vercel origin can be changed
+      # without rebuilding the image.
+      CORS_ORIGINS: ${CORS_ORIGINS:-["https://distributed-legal-rag.vercel.app"]}
+      CORS_ORIGIN_REGEX: ${CORS_ORIGIN_REGEX:-}
+      CORS_ALLOW_CREDENTIALS: "false"
+    secrets:
+      - openai_api_key
+      - api_key
     expose:
       - "8000"
     depends_on:
@@ -51,11 +66,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 300M
+          memory: 400M
         reservations:
           memory: 150M
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=5).status==200 else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -72,8 +87,12 @@ services:
     environment:
       DB_NODES: cpp_database_0:8081,cpp_database_1:8081,cpp_database_2:8081
       ROUTER_PORT: 8080
+      ROUTER_HTTP_PORT: 8081
+      ROUTER_WORKER_THREADS: 4
+      ROUTER_MAX_QUEUE: 1000
     expose:
       - "8080"
+      - "8081"
     depends_on:
       - cpp_database_0
       - cpp_database_1
@@ -82,11 +101,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 200M
-        reservations:
           memory: 100M
+        reservations:
+          memory: 64M
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 8080"]
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8081/health', timeout=5).status==200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -103,25 +122,21 @@ services:
     environment:
       POSTGRES_DB: legal_rag
       POSTGRES_USER: rag_user
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_MAX_CONNECTIONS: 40
-      POSTGRES_SHARED_BUFFERS: 64MB
-      POSTGRES_EFFECTIVE_CACHE_SIZE: 512MB
-      POSTGRES_WORK_MEM: 16MB
-      POSTGRES_MAINTENANCE_WORK_MEM: 64MB
+      POSTGRES_PASSWORD_FILE: /run/secrets/DB_PASSWORD
+    secrets:
+      - DB_PASSWORD
     volumes:
       - ./init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
       - pgdata:/var/lib/postgresql/data
-    # No exposed ports - internal only
     expose:
       - "5432"
     restart: unless-stopped
     deploy:
       resources:
         limits:
-          memory: 800M
+          memory: 300M
         reservations:
-          memory: 400M
+          memory: 150M
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U rag_user -d legal_rag"]
       interval: 30s
@@ -142,9 +157,12 @@ services:
       DB_PORT: 5432
       DB_NAME: legal_rag
       DB_USER: rag_user
-      DB_PASSWORD: ${DB_PASSWORD}
       DB_SHARD_ID: 0
       SERVER_PORT: 8081
+      DB_WORKER_THREADS: 4
+      DB_MAX_QUEUE: 1000
+    secrets:
+      - DB_PASSWORD
     expose:
       - "8081"
     depends_on:
@@ -154,9 +172,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 300M
+          memory: 64M
         reservations:
-          memory: 150M
+          memory: 48M
     logging:
       driver: "json-file"
       options:
@@ -171,9 +189,12 @@ services:
       DB_PORT: 5432
       DB_NAME: legal_rag
       DB_USER: rag_user
-      DB_PASSWORD: ${DB_PASSWORD}
       DB_SHARD_ID: 1
       SERVER_PORT: 8081
+      DB_WORKER_THREADS: 4
+      DB_MAX_QUEUE: 1000
+    secrets:
+      - DB_PASSWORD
     expose:
       - "8081"
     depends_on:
@@ -183,9 +204,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 300M
+          memory: 64M
         reservations:
-          memory: 150M
+          memory: 48M
     logging:
       driver: "json-file"
       options:
@@ -200,9 +221,12 @@ services:
       DB_PORT: 5432
       DB_NAME: legal_rag
       DB_USER: rag_user
-      DB_PASSWORD: ${DB_PASSWORD}
       DB_SHARD_ID: 2
       SERVER_PORT: 8081
+      DB_WORKER_THREADS: 4
+      DB_MAX_QUEUE: 1000
+    secrets:
+      - DB_PASSWORD
     expose:
       - "8081"
     depends_on:
@@ -212,14 +236,38 @@ services:
     deploy:
       resources:
         limits:
-          memory: 300M
+          memory: 64M
         reservations:
-          memory: 150M
+          memory: 48M
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
+
+  # Profiled ingestion job. Runs alongside the live stack:
+  #   docker compose -f docker-compose.prod.yml --profile ingest run --rm ingestion
+  # The 450 MB limit + modest batch size keep it on swap instead of triggering
+  # the kernel OOM killer on the 1 GB t3.micro.
+  ingestion:
+    image: ghcr.io/${GITHUB_REPOSITORY:-local}/data_ingestion:${IMAGE_TAG:-latest}
+    profiles: ["ingest"]
+    container_name: legal-rag-ingestion
+    environment:
+      ROUTER_HOST: cpp_router
+      ROUTER_PORT: 8080
+      MAX_INGESTION_CHUNKS: ${MAX_INGESTION_CHUNKS:-1000}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-16}
+      EMBEDDING_DEVICE: cpu
+    depends_on:
+      cpp_router:
+        condition: service_healthy
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 450M
 
   # Certbot for Let's Encrypt auto-renewal
   certbot:
@@ -233,7 +281,15 @@ services:
     deploy:
       resources:
         limits:
-          memory: 50M
+          memory: 30M
+
+secrets:
+  DB_PASSWORD:
+    file: ./secrets/DB_PASSWORD
+  openai_api_key:
+    file: ./secrets/openai_api_key
+  api_key:
+    file: ./secrets/api_key
 
 volumes:
   pgdata:

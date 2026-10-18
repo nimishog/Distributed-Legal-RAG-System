@@ -106,9 +106,12 @@ function LoadingIndicator({ message = 'Searching legal documents...' }) {
       <StatusText>{message}</StatusText>
       <ProgressSteps>
         {steps.map((step, idx) => (
-          <Step key={step.key} $active={idx <= 1} $done={idx < 1}>
+          // The gateway does not stream progress, so the steps are shown as
+          // pending rather than faking completion. Only the first step spins
+          // to signal that the request is in flight.
+          <Step key={step.key} $active={false} $done={false}>
             <div className="step-icon">
-              {idx < 1 ? (
+              {idx === 0 ? (
                 <Spinner style={{ width: 12, height: 12, borderWidth: 2 }} />
               ) : (
                 <span>{step.icon}</span>

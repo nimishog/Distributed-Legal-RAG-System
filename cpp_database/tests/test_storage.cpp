@@ -49,7 +49,7 @@ protected:
 std::unique_ptr<PostgresStorage> PostgresStorageTest::storage = nullptr;
 
 TEST_F(PostgresStorageTest, InsertAndSearch) {
-    std::vector<float> embedding(768, 0.0f);
+    std::vector<float> embedding(384, 0.0f);
     embedding[0] = 1.0f;
 
     storage->insert("test-id-1", "Test legal text about contracts", embedding, {{"source", "test"}});
@@ -64,19 +64,19 @@ TEST_F(PostgresStorageTest, InsertAndSearch) {
 
 TEST_F(PostgresStorageTest, SearchTopK) {
     for (int i = 0; i < 10; ++i) {
-        std::vector<float> emb(768, 0.0f);
-        emb[i % 768] = 1.0f;
+        std::vector<float> emb(384, 0.0f);
+        emb[i % 384] = 1.0f;
         storage->insert("test-id-" + std::to_string(i), "Text " + std::to_string(i), emb, {});
     }
 
-    std::vector<float> query(768, 0.0f);
+    std::vector<float> query(384, 0.0f);
     query[0] = 1.0f;
     auto results = storage->search(query, 3);
     EXPECT_EQ(results.size(), 3);
 }
 
 TEST_F(PostgresStorageTest, Delete) {
-    std::vector<float> embedding(768, 0.0f);
+    std::vector<float> embedding(384, 0.0f);
     embedding[0] = 1.0f;
 
     storage->insert("test-del-1", "To be deleted", embedding, {});
@@ -96,7 +96,7 @@ TEST_F(PostgresStorageTest, HealthCheck) {
 }
 
 TEST_F(PostgresStorageTest, MetadataFilter) {
-    std::vector<float> emb(768, 0.0f);
+    std::vector<float> emb(384, 0.0f);
     emb[0] = 1.0f;
 
     storage->insert("meta-1", "Contract law", emb, {{"category", "contracts"}});

@@ -2,8 +2,10 @@
 #include <pqxx/pqxx>
 #include <nlohmann/json.hpp>
 #include <sstream>
+#include <iomanip>
 #include <iostream>
 #include <chrono>
+#include <thread>
 
 using json = nlohmann::json;
 
@@ -23,9 +25,16 @@ void PostgresStorage::prepare_statements(pqxx::connection& conn) {
         "ON CONFLICT (id) DO UPDATE SET "
         "text = EXCLUDED.text, embedding = EXCLUDED.embedding, metadata = EXCLUDED.metadata");
 
+    conn.prepare("batch_insert_chunks",
+        "INSERT INTO legal_chunks (id, text, embedding, metadata) "
+        "SELECT * FROM UNNEST($1::uuid[], $2::text[], $3::vector[], $4::jsonb[]) "
+        "ON CONFLICT (id) DO UPDATE SET "
+        "text = EXCLUDED.text, embedding = EXCLUDED.embedding, metadata = EXCLUDED.metadata");
+
     conn.prepare("search_chunks",
         "SELECT id, text, 1 - (embedding <=> $1::vector) AS score, metadata "
         "FROM legal_chunks "
+        "WHERE ($3::jsonb IS NULL OR metadata @> $3::jsonb) "
         "ORDER BY embedding <=> $1::vector "
         "LIMIT $2");
 
@@ -41,15 +50,67 @@ void PostgresStorage::prepare_statements(pqxx::connection& conn) {
 
 std::unique_ptr<pqxx::connection> PostgresStorage::acquire() {
     std::unique_lock<std::mutex> lock(pool_mutex_);
+    
+    // First, try to find an available connection in the pool
     for (auto& wrapper : pool_) {
-        if (!wrapper.in_use) {
-            wrapper.in_use = true;
-            return std::move(wrapper.conn);
+        if (!wrapper.in_use && wrapper.conn) {
+            // Validate connection before reuse
+            if (validate_connection(*wrapper.conn)) {
+                wrapper.in_use = true;
+                return std::move(wrapper.conn);
+            } else {
+                // Connection is stale, create a new one
+                wrapper.conn = std::make_unique<pqxx::connection>(conn_string_);
+                prepare_statements(*wrapper.conn);
+                wrapper.in_use = true;
+                return std::move(wrapper.conn);
+            }
         }
     }
-    auto conn = std::make_unique<pqxx::connection>(conn_string_);
-    prepare_statements(*conn);
-    return conn;
+    
+    // If pool has room, create a new connection
+    if (pool_.size() < pool_size_) {
+        auto conn = std::make_unique<pqxx::connection>(conn_string_);
+        prepare_statements(*conn);
+        return conn;
+    }
+    
+    // Pool is at max capacity, wait for a connection to become available
+    // This prevents unbounded growth - wait with timeout
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (true) {
+        for (auto& wrapper : pool_) {
+            if (!wrapper.in_use && wrapper.conn) {
+                if (validate_connection(*wrapper.conn)) {
+                    wrapper.in_use = true;
+                    return std::move(wrapper.conn);
+                } else {
+                    wrapper.conn = std::make_unique<pqxx::connection>(conn_string_);
+                    prepare_statements(*wrapper.conn);
+                    wrapper.in_use = true;
+                    return std::move(wrapper.conn);
+                }
+            }
+        }
+        // All connections in use, wait a bit and retry
+        if (std::chrono::steady_clock::now() > deadline) {
+            throw std::runtime_error("Timeout waiting for database connection from pool");
+        }
+        lock.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        lock.lock();
+    }
+}
+
+bool PostgresStorage::validate_connection(pqxx::connection& conn) {
+    try {
+        if (!conn.is_open()) return false;
+        pqxx::work txn(conn);
+        txn.exec_prepared("health_check");
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 void PostgresStorage::release(std::unique_ptr<pqxx::connection>&& conn) {
@@ -61,11 +122,20 @@ void PostgresStorage::release(std::unique_ptr<pqxx::connection>&& conn) {
             return;
         }
     }
-    pool_.push_back({std::move(conn), false});
+    // Should not happen if pool_size_ is respected, but handle gracefully
+    if (pool_.size() < pool_size_) {
+        pool_.push_back({std::move(conn), false});
+    } else {
+        // Pool is full, just close the connection
+        // (connection will be closed when unique_ptr is destroyed)
+    }
 }
 
 std::string PostgresStorage::vector_to_pg_array(const std::vector<float>& vec) {
     std::ostringstream oss;
+    // 9 significant digits round-trips float32 exactly enough for pgvector
+    // while keeping the text representation compact.
+    oss << std::setprecision(9);
     oss << '[';
     for (size_t i = 0; i < vec.size(); ++i) {
         if (i > 0) oss << ',';
@@ -91,16 +161,73 @@ void PostgresStorage::insert(const std::string& id,
     release(std::move(conn));
 }
 
+void PostgresStorage::batch_insert(const std::vector<InsertRequest>& requests) {
+    if (requests.empty()) return;
+    
+    auto conn = acquire();
+    try {
+        pqxx::work txn(*conn);
+        
+        std::vector<std::string> ids;
+        std::vector<std::string> texts;
+        std::vector<std::string> embeddings;
+        std::vector<std::string> metadatas;
+        
+        ids.reserve(requests.size());
+        texts.reserve(requests.size());
+        embeddings.reserve(requests.size());
+        metadatas.reserve(requests.size());
+        
+        for (const auto& req : requests) {
+            ids.push_back(req.id);
+            texts.push_back(req.text);
+            embeddings.push_back(vector_to_pg_array(req.embedding));
+            metadatas.push_back(req.metadata.dump());
+        }
+        
+        // Convert vectors to PostgreSQL array format for prepared statement
+        auto vec_to_pg_array = [](const std::vector<std::string>& vec) -> std::string {
+            std::ostringstream oss;
+            oss << '{';
+            for (size_t i = 0; i < vec.size(); ++i) {
+                if (i > 0) oss << ',';
+                // Escape special characters
+                std::string escaped = vec[i];
+                // Escape backslashes and quotes
+                std::string result;
+                for (char c : escaped) {
+                    if (c == '\\' || c == '"') result += '\\';
+                    result += c;
+                }
+                oss << '"' << result << '"';
+            }
+            oss << '}';
+            return oss.str();
+        };
+        
+        std::string ids_array = vec_to_pg_array(ids);
+        std::string texts_array = vec_to_pg_array(texts);
+        std::string embeddings_array = vec_to_pg_array(embeddings);
+        std::string metadatas_array = vec_to_pg_array(metadatas);
+        
+        txn.exec_prepared("batch_insert_chunks",
+            ids_array, texts_array, embeddings_array, metadatas_array);
+        txn.commit();
+    } catch (const std::exception& e) {
+        throw std::runtime_error("Batch insert failed: " + std::string(e.what()));
+    }
+    release(std::move(conn));
+}
+
 std::vector<SearchResult> PostgresStorage::search(const std::vector<float>& embedding,
                                                   size_t top_k,
                                                   const json& filter) {
-    (void)filter;
     auto conn = acquire();
     std::vector<SearchResult> results;
     try {
         pqxx::work txn(*conn);
         auto res = txn.exec_prepared("search_chunks",
-            vector_to_pg_array(embedding), static_cast<int>(top_k));
+            vector_to_pg_array(embedding), static_cast<int>(top_k), filter.dump());
         for (const auto& row : res) {
             SearchResult r;
             r.id = row["id"].as<std::string>();
@@ -122,13 +249,25 @@ void PostgresStorage::remove(const std::vector<std::string>& ids) {
     auto conn = acquire();
     try {
         pqxx::work txn(*conn);
-        std::string array_str = "{";
-        for (size_t i = 0; i < ids.size(); ++i) {
-            if (i > 0) array_str += ",";
-            array_str += "\"" + ids[i] + "\"";
-        }
-        array_str += "}";
-        txn.exec_prepared("delete_chunks", array_str);
+        auto vec_to_pg_array = [](const std::vector<std::string>& vec) -> std::string {
+            std::ostringstream oss;
+            oss << '{';
+            for (size_t i = 0; i < vec.size(); ++i) {
+                if (i > 0) oss << ',';
+                std::string escaped = vec[i];
+                std::string result;
+                for (char c : escaped) {
+                    if (c == '\\' || c == '"') result += '\\';
+                    result += c;
+                }
+                oss << '"' << result << '"';
+            }
+            oss << '}';
+            return oss.str();
+        };
+        
+        std::string ids_array = vec_to_pg_array(ids);
+        txn.exec_prepared("delete_chunks", ids_array);
         txn.commit();
     } catch (const std::exception& e) {
         throw std::runtime_error("Delete failed: " + std::string(e.what()));
@@ -150,6 +289,25 @@ HealthStatus PostgresStorage::health() {
         if (!count_res.empty()) {
             status.total_chunks = count_res[0][0].as<size_t>();
         }
+        
+        // Validate that the table has at least one index. This queries the
+        // system catalog (pg_index/pg_class) instead of relying on a hardcoded
+        // index name, so renaming the HNSW index does not false-positive.
+        pqxx::result idx_res = txn.exec(
+            "SELECT 1 FROM pg_catalog.pg_index i "
+            "JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid "
+            "JOIN pg_catalog.pg_class t ON t.oid = i.indrelid "
+            "WHERE t.relname = 'legal_chunks' LIMIT 1");
+        if (idx_res.empty()) {
+            throw std::runtime_error("No index found on legal_chunks");
+        }
+        
+        // Test vector search works
+        pqxx::result search_test = txn.exec("SELECT 1 FROM legal_chunks LIMIT 1");
+        if (search_test.empty() && status.total_chunks > 0) {
+            throw std::runtime_error("Vector search test failed");
+        }
+        
         txn.commit();
         status.healthy = true;
         status.message = "OK";

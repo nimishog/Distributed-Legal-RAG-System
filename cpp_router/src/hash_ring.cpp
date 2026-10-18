@@ -2,14 +2,22 @@
 #include <openssl/sha.h>
 #include <algorithm>
 #include <cstring>
+#include <cstdint>
+#include <unordered_set>
 
 HashRing::HashRing(int virtual_nodes) : virtual_nodes_(virtual_nodes) {}
 
 uint64_t HashRing::hash_key(const std::string& key) const {
     unsigned char hash[SHA256_DIGEST_LENGTH];
     SHA256(reinterpret_cast<const unsigned char*>(key.data()), key.size(), hash);
+    
+    // Use bytes 8-15 (second 64 bits) for better distribution
+    // XOR with first 8 bytes for additional mixing
     uint64_t result = 0;
-    std::memcpy(&result, hash, sizeof(uint64_t));
+    std::memcpy(&result, hash + 8, sizeof(uint64_t));
+    uint64_t first_part = 0;
+    std::memcpy(&first_part, hash, sizeof(uint64_t));
+    result ^= first_part + 0x9e3779b97f4a7c15ULL + (result << 6) + (result >> 2);
     return result;
 }
 
@@ -43,9 +51,28 @@ void HashRing::remove_node(const std::string& id) {
 
 void HashRing::mark_healthy(const std::string& id, bool healthy) {
     std::lock_guard<std::mutex> lock(mutex_);
-    for (auto& [hash, node] : ring_) {
-        if (node.id == id) {
-            node.healthy = healthy;
+    auto vnodes_it = node_vnodes_.find(id);
+    if (vnodes_it == node_vnodes_.end()) return;
+
+    if (healthy) {
+        node_failures_[id] = 0;
+        for (uint64_t h : vnodes_it->second) {
+            auto it = ring_.find(h);
+            if (it != ring_.end()) {
+                it->second.healthy = true;
+                it->second.consecutive_failures = 0;
+            }
+        }
+    } else {
+        int failures = ++node_failures_[id];
+        if (failures >= HASH_RING_MAX_CONSECUTIVE_FAILURES) {
+            for (uint64_t h : vnodes_it->second) {
+                auto it = ring_.find(h);
+                if (it != ring_.end()) {
+                    it->second.healthy = false;
+                    it->second.consecutive_failures = failures;
+                }
+            }
         }
     }
 }
@@ -53,28 +80,25 @@ void HashRing::mark_healthy(const std::string& id, bool healthy) {
 std::vector<Node> HashRing::get_nodes(const std::string& key, int replication) const {
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<Node> result;
-    if (ring_.empty()) return result;
+    if (ring_.empty() || replication <= 0) return result;
 
     uint64_t key_hash = hash_key(key);
     auto it = ring_.lower_bound(key_hash);
     if (it == ring_.end()) it = ring_.begin();
 
-    std::string start_id;
-    int count = 0;
-    int iterations = 0;
-    const int max_iterations = ring_.size() * 2;
+    std::unordered_set<std::string> seen;
+    size_t iterations = 0;
+    const size_t max_iterations = ring_.size() * 2;
 
-    while (count < replication && iterations < max_iterations) {
+    while (result.size() < static_cast<size_t>(replication) && iterations < max_iterations) {
         if (it == ring_.end()) it = ring_.begin();
 
-        if (it->second.healthy) {
-            if (result.empty() || it->second.id != result.back().id) {
-                result.push_back(it->second);
-                count++;
-            }
+        const Node& node = it->second;
+        if (node.healthy && seen.insert(node.id).second) {
+            result.push_back(node);
         }
         ++it;
-        iterations++;
+        ++iterations;
     }
 
     return result;
@@ -83,8 +107,9 @@ std::vector<Node> HashRing::get_nodes(const std::string& key, int replication) c
 std::vector<Node> HashRing::get_all_nodes() const {
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<Node> result;
+    std::unordered_set<std::string> seen;
     for (const auto& [hash, node] : ring_) {
-        if (result.empty() || result.back().id != node.id) {
+        if (seen.insert(node.id).second) {
             result.push_back(node);
         }
     }

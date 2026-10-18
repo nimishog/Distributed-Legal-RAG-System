@@ -1,5 +1,5 @@
 import pytest
-from src.chunker import split_legal_text, chunk_document
+from src.chunker import CHUNK_OVERLAP, CHUNK_SIZE, split_legal_text, chunk_document
 
 def test_split_legal_text():
     text = "Section 1. This is the first section.\n\nSection 2. This is the second section with more content.\n\nSection 3. Third section."
@@ -8,10 +8,12 @@ def test_split_legal_text():
     assert all(len(c) > 0 for c in chunks)
 
 def test_split_long_text():
-    long_text = " ".join(["This is a sentence."] * 100)
+    long_text = "\n\n".join(["This is a sentence."] * 300)
     chunks = split_legal_text(long_text)
     assert len(chunks) > 1
-    assert all(len(c.split()) <= 512 for c in chunks)
+    # Each chunk may carry up to CHUNK_OVERLAP words of overlap from the
+    # previous chunk, so the effective bound is CHUNK_SIZE + CHUNK_OVERLAP.
+    assert all(len(c.split()) <= CHUNK_SIZE + CHUNK_OVERLAP for c in chunks)
 
 def test_chunk_document():
     doc = {

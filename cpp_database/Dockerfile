@@ -14,7 +14,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     g++ \
     libpqxx-dev \
     libpq-dev \
-    libpqxx-6.4 \
     libpq5 \
     ca-certificates \
     git \

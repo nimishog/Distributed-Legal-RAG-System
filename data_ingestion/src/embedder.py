@@ -8,8 +8,8 @@ from typing import List, Dict, Any
 
 MAX_CHUNKS = int(os.getenv("MAX_INGESTION_CHUNKS", "1000"))
 BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
-MODEL_NAME = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
-DEVICE = os.getenv("EMBEDDING_DEVICE", "cuda")
+MODEL_NAME = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
 INPUT_FILE = DATA_DIR / "chunks.json"
@@ -31,7 +31,7 @@ def main():
     print(f"Model loaded. Embedding dimension: {model.get_sentence_embedding_dimension()}")
 
     print(f"Loading chunks from {INPUT_FILE}...")
-    with open(INPUT_FILE) as f:
+    with open(INPUT_FILE, encoding="utf-8") as f:
         chunks = json.load(f)
 
     chunks = chunks[:MAX_CHUNKS]
@@ -49,7 +49,9 @@ def main():
             normalize_embeddings=True
         )
         embeddings.append(batch_embeddings)
-        if device == "cuda":
+        if device == "cuda" and (i // BATCH_SIZE + 1) % 25 == 0:
+            # Free unused CUDA blocks periodically; per-batch empty_cache is
+            # very expensive because it forces the allocator to re-reserve.
             torch.cuda.empty_cache()
         if (i // BATCH_SIZE + 1) % 10 == 0:
             print(f"  Processed {i + len(batch)} / {len(texts)} texts")
@@ -59,7 +61,7 @@ def main():
         chunk["embedding"] = embeddings[i].tolist()
 
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(OUTPUT_FILE, "w") as f:
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump(chunks, f, indent=2)
 
     print(f"Saved {len(chunks)} embedded chunks to {OUTPUT_FILE}")

@@ -24,11 +24,14 @@ class RouterConnection:
         self.reader = reader
         self.writer = writer
         self.in_use = False
-        self.last_used = asyncio.get_event_loop().time()
+        try:
+            self.last_used = asyncio.get_running_loop().time()
+        except RuntimeError:
+            self.last_used = 0.0
 
     async def send_frame(self, payload: dict) -> bool:
         data = json.dumps(payload).encode("utf-8")
-        length = struct.pack("<I", len(data))
+        length = struct.pack(">I", len(data))
         try:
             self.writer.write(length + data)
             await self.writer.drain()
@@ -42,7 +45,7 @@ class RouterConnection:
             length_data = await self.reader.readexactly(4)
             if len(length_data) != 4:
                 return None
-            length = struct.unpack("<I", length_data)[0]
+            length = struct.unpack(">I", length_data)[0]
             if length > 16 * 1024 * 1024:
                 logger.error(f"Frame too large: {length}")
                 return None
@@ -72,15 +75,18 @@ class RouterClient:
         pool_size: int = 2,
         connect_timeout: float = 10.0,
         request_timeout: float = 30.0,
+        acquire_timeout: float = 10.0,
     ):
         self.host = host
         self.port = port
         self.pool_size = pool_size
         self.connect_timeout = connect_timeout
         self.request_timeout = request_timeout
+        self.acquire_timeout = acquire_timeout
         self._pool: asyncio.Queue[RouterConnection] = asyncio.Queue(maxsize=pool_size)
         self._lock = asyncio.Lock()
         self._initialized = False
+        self._closed = False
 
     async def initialize(self):
         async with self._lock:
@@ -120,21 +126,34 @@ class RouterClient:
         return True
 
     async def acquire(self) -> Optional[RouterConnection]:
+        if self._closed:
+            logger.error("Cannot acquire connection: client is closed")
+            return None
+            
         try:
-            conn = await asyncio.wait_for(self._pool.get(), timeout=5.0)
+            conn = await asyncio.wait_for(self._pool.get(), timeout=self.acquire_timeout)
             if not await self._ensure_connected(conn):
-                await self._pool.put(await self._create_connection())
-                return await self.acquire()
+                new_conn = await self._create_connection()
+                if new_conn:
+                    await self._pool.put(new_conn)
+                    return await self.acquire()
+                else:
+                    logger.error("Failed to create new router connection")
+                    return None
             conn.in_use = True
-            conn.last_used = asyncio.get_event_loop().time()
+            conn.last_used = asyncio.get_running_loop().time()
             return conn
         except asyncio.TimeoutError:
-            logger.error("Timeout acquiring connection from pool")
+            logger.error(f"Timeout acquiring connection from pool after {self.acquire_timeout}s (pool_size={self.pool_size})")
             return None
 
     async def release(self, conn: RouterConnection):
+        if self._closed:
+            conn.close()
+            await conn.wait_closed()
+            return
         conn.in_use = False
-        conn.last_used = asyncio.get_event_loop().time()
+        conn.last_used = asyncio.get_running_loop().time()
         await self._pool.put(conn)
 
     @async_retry_with_backoff(
@@ -191,7 +210,9 @@ class RouterClient:
             await self.release(conn)
 
     async def health_check(self) -> bool:
-        conn = await self.acquire()
+        # The router closes the connection after a health op, so use a
+        # dedicated short-lived connection to avoid poisoning the pool.
+        conn = await self._create_connection()
         if not conn:
             return False
         try:
@@ -199,11 +220,38 @@ class RouterClient:
             if not await conn.send_frame(payload):
                 return False
             response = await asyncio.wait_for(conn.read_frame(), timeout=5.0)
-            return response and response.get("healthy", False)
+            return bool(response and response.get("healthy", False))
         finally:
-            await self.release(conn)
+            try:
+                conn.close()
+                await conn.wait_closed()
+            except Exception as e:
+                logger.debug(f"Error closing health check connection: {e}")
 
     async def close(self):
+        self._closed = True
+        logger.info("Draining router client connection pool...")
+        
+        # Wait for in-use connections to be released (with timeout)
+        max_wait_time = 30.0
+        try:
+            start_time = asyncio.get_running_loop().time()
+        except RuntimeError:
+            start_time = 0.0
+        
+        while True:
+            # Check if all connections are back in the pool
+            if self._pool.qsize() >= self.pool_size:
+                break
+            await asyncio.sleep(0.5)
+            try:
+                if asyncio.get_running_loop().time() - start_time > max_wait_time:
+                    logger.warning("Timeout waiting for connections to be released, forcing close")
+                    break
+            except RuntimeError:
+                break
+        
+        # Close all connections in pool
         while not self._pool.empty():
             try:
                 conn = self._pool.get_nowait()
@@ -213,3 +261,5 @@ class RouterClient:
                 break
             except Exception as e:
                 logger.error(f"Error closing connection: {e}")
+        
+        logger.info("Router client connection pool closed")

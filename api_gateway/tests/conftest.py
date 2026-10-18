@@ -1,21 +1,15 @@
 import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from fastapi.testclient import TestClient
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
-from src.main import app, get_router_client, get_llm_client, get_semaphore
+from src.main import app
+from src.dependencies import get_router_client, get_llm_client, get_semaphore
 from src.services.db_client import RouterClient, SearchResult
 from src.services.llm_client import LLMClient, LLMResponse
 from src.config import Settings
 from src.schemas.models import Citation
-
-
-@pytest.fixture(scope="session")
-def event_loop():
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
 
 
 @pytest.fixture
@@ -31,7 +25,7 @@ def mock_settings():
         api_host="0.0.0.0",
         api_port=8000,
         log_level="DEBUG",
-        embedding_model="sentence-transformers/all-mpnet-base-v2",
+        embedding_model="sentence-transformers/all-MiniLM-L6-v2",
         embedding_device="cpu",
         rate_limit_concurrent=2,
     )
@@ -65,7 +59,7 @@ def mock_router_client():
 def mock_llm_client():
     client = AsyncMock(spec=LLMClient)
     client._embedding_model = MagicMock()
-    client.embed_query = MagicMock(return_value=[0.1] * 768)
+    client.embed_query = MagicMock(return_value=[0.1] * 384)
     client.generate_answer = AsyncMock(
         return_value=LLMResponse(
             answer="Based on the context, the statute of limitations for breach of contract in California is 4 years [1].",
@@ -114,5 +108,6 @@ def client(test_app):
 
 @pytest.fixture
 async def async_client(test_app):
-    async with AsyncClient(app=test_app, base_url="http://test") as ac:
+    transport = ASGITransport(app=test_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac

@@ -152,7 +152,7 @@ const StatItem = styled.span`
   }
 `;
 
-function ChatInterface({ messages, isLoading, error, onSendMessage, onClearChat }) {
+function ChatInterface({ messages, isLoading, error, onSendMessage, onClearChat, onDismissError }) {
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
   const [inputValue, setInputValue] = useState('');
@@ -222,7 +222,7 @@ function ChatInterface({ messages, isLoading, error, onSendMessage, onClearChat 
         )}
         {messages.map((msg, idx) => (
           <MessageBubble
-            key={`${msg.role}-${idx}-${msg.content?.slice(0, 20)}`}
+            key={msg.id || `${msg.role}-${idx}`}
             message={msg}
             index={idx}
           />
@@ -249,7 +249,7 @@ function ChatInterface({ messages, isLoading, error, onSendMessage, onClearChat 
       )}
 
       <InputArea>
-        <ErrorMessage message={error} onDismiss={() => {}} />
+        <ErrorMessage message={error} onDismiss={onDismissError} />
         <form onSubmit={handleSubmit}>
           <InputWrapper>
             <TextArea

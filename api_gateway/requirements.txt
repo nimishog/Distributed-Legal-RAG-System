@@ -1,3 +1,7 @@
+# Runtime dependencies for the API Gateway.
+# torch is intentionally NOT listed here: it is installed from the CPU wheel
+# index in the Dockerfile before this file is processed. Listing it would let
+# pip resolve the multi-GB CUDA wheel from PyPI.
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
 pydantic==2.7.4
@@ -5,11 +9,10 @@ pydantic-settings==2.3.4
 openai==1.30.3
 httpx==0.27.0
 sentence-transformers==3.0.1
-torch==2.3.1 --index-url https://download.pytorch.org/whl/cpu
 prometheus-client==0.19.0
 psutil==5.9.8
-python-json-logger==2.0.7
-pytest==8.2.2
-pytest-asyncio==0.23.3
-pytest-mock==3.14.0
-httpx==0.27.0
+opentelemetry-api==1.21.0
+opentelemetry-sdk==1.21.0
+opentelemetry-instrumentation-fastapi==0.42b0
+opentelemetry-instrumentation-httpx==0.42b0
+opentelemetry-exporter-otlp==1.21.0

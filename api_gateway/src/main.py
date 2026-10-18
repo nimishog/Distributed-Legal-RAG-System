@@ -2,15 +2,19 @@ import logging
 import time
 import psutil
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
 from .config import get_settings
+from .dependencies import get_llm_client, get_router_client
 from .routers.ask import router as ask_router
 from .schemas.models import HealthResponse, SystemHealthResponse
 from .services.db_client import RouterClient
 from .services.llm_client import LLMClient
+from .utils.auth import APIKeyAuthMiddleware
+from .utils.tracing import init_tracing
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,45 +22,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-_router_client: RouterClient = None
-_llm_client: LLMClient = None
 _start_time = time.time()
-
-
-def get_router_client() -> RouterClient:
-    global _router_client
-    if _router_client is None:
-        settings = get_settings()
-        _router_client = RouterClient(
-            host=settings.router_host,
-            port=settings.router_port,
-            pool_size=settings.router_pool_size,
-        )
-    return _router_client
-
-
-def get_llm_client() -> LLMClient:
-    global _llm_client
-    if _llm_client is None:
-        _llm_client = LLMClient()
-    return _llm_client
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _router_client, _llm_client
-    settings = get_settings()
-
     logger.info("Starting API Gateway...")
 
-    _router_client = get_router_client()
-    await _router_client.initialize()
+    router_client = get_router_client()
+    await router_client.initialize()
 
-    _llm_client = get_llm_client()
-    await _llm_client.initialize()
+    llm_client = get_llm_client()
+    await llm_client.initialize()
 
-    router_healthy = await _router_client.health_check()
-    embedding_loaded = _llm_client._embedding_model is not None
+    router_healthy = await router_client.health_check()
+    embedding_loaded = llm_client._embedding_model is not None
 
     logger.info(
         f"Startup complete: router_healthy={router_healthy}, "
@@ -66,10 +46,8 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("Shutting down API Gateway...")
-    if _router_client:
-        await _router_client.close()
-    if _llm_client:
-        await _llm_client.close()
+    await router_client.close()
+    await llm_client.close()
     logger.info("Shutdown complete")
 
 
@@ -80,34 +58,47 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Instrumentation must happen before the ASGI app starts (adds middleware)
+init_tracing(app)
+
+settings = get_settings()
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=settings.cors_origins,
+    allow_origin_regex=settings.cors_origin_regex or None,
+    allow_credentials=settings.cors_allow_credentials,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
 )
+
+app.add_middleware(APIKeyAuthMiddleware)
 
 app.include_router(ask_router)
 
 
 @app.get("/health", response_model=HealthResponse)
-async def health_check():
-    settings = get_settings()
-    router_client = get_router_client()
-    llm_client = get_llm_client()
-
+async def health_check(
+    router_client: RouterClient = Depends(get_router_client),
+    llm_client: LLMClient = Depends(get_llm_client),
+):
     router_healthy = await router_client.health_check()
     embedding_loaded = llm_client._embedding_model is not None
 
     healthy = router_healthy and embedding_loaded
 
-    return HealthResponse(
+    body = HealthResponse(
         status="healthy" if healthy else "degraded",
         healthy=healthy,
         router_connected=router_healthy,
         embedding_model_loaded=embedding_loaded,
     )
+    # Return 503 when degraded so container healthchecks (and nginx) gate
+    # traffic instead of reporting a false healthy status.
+    if not healthy:
+        return JSONResponse(status_code=503, content=body.model_dump(mode="json"))
+    return body
 
 
 @app.get("/system-health", response_model=SystemHealthResponse)

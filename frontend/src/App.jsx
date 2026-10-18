@@ -2,13 +2,17 @@ import { useState, useCallback } from 'react';
 import ChatInterface from './components/ChatInterface';
 import { apiClient } from './api/axios_client';
 
+function generateId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+}
+
 function App() {
   const [messages, setMessages] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
 
   const sendMessage = useCallback(async (question) => {
-    const userMessage = { role: 'user', content: question };
+    const userMessage = { id: generateId(), role: 'user', content: question };
     setMessages((prev) => [...prev, userMessage]);
     setIsLoading(true);
     setError(null);
@@ -21,6 +25,7 @@ function App() {
       });
 
       const assistantMessage = {
+        id: generateId(),
         role: 'assistant',
         content: response.data.answer,
         citations: response.data.citations,
@@ -36,7 +41,7 @@ function App() {
       setError(errorMessage);
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', content: `Error: ${errorMessage}`, isError: true },
+        { id: generateId(), role: 'assistant', content: `Error: ${errorMessage}`, isError: true },
       ]);
     } finally {
       setIsLoading(false);
@@ -75,6 +80,7 @@ function App() {
           error={error}
           onSendMessage={sendMessage}
           onClearChat={clearChat}
+          onDismissError={() => setError(null)}
         />
       </main>
 

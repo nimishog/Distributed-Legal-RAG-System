@@ -59,6 +59,8 @@ class LLMClient:
         return self._embedding_model
 
     def embed_query(self, text: str) -> List[float]:
+        if not text or not text.strip():
+            raise ValueError("Cannot embed an empty question")
         model = self._load_embedding_model()
         embedding = model.encode(text, convert_to_numpy=True, normalize_embeddings=True)
         return embedding.tolist()

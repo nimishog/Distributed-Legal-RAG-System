@@ -1,0 +1,110 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  cpp:
+    name: C++ unit tests
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ pkg-config libssl-dev libpqxx-dev libpq-dev
+
+      - name: Build and test cpp_database
+        run: |
+          cmake -S cpp_database -B cpp_database/build -DBUILD_TESTS=ON
+          cmake --build cpp_database/build --parallel
+          ctest --test-dir cpp_database/build --output-on-failure
+
+      - name: Build and test cpp_router
+        run: |
+          cmake -S cpp_router -B cpp_router/build -DBUILD_TESTS=ON
+          cmake --build cpp_router/build --parallel
+          ctest --test-dir cpp_router/build --output-on-failure
+
+  python:
+    name: Python tests
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install CPU-only PyTorch
+        run: pip install --extra-index-url https://download.pytorch.org/whl/cpu torch==2.3.1
+
+      - name: Run data_ingestion tests
+        run: |
+          pip install -r data_ingestion/requirements-dev.txt
+          cd data_ingestion && python -m pytest tests/ -v
+
+      - name: Run api_gateway tests
+        run: |
+          pip install -r api_gateway/requirements-dev.txt
+          cd api_gateway && python -m pytest tests/ -v
+
+  frontend:
+    name: Frontend tests
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test -- --run
+
+  integration:
+    name: Compose integration tests
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start local stack
+        run: docker compose -f docker-compose.local.yml up -d --build
+
+      - name: Wait for API health
+        run: |
+          code=000
+          for _ in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/health || true)
+            [ "$code" = "200" ] && break
+            sleep 5
+          done
+          echo "health=$code"
+          [ "$code" = "200" ] || { docker compose -f docker-compose.local.yml logs api_gateway; exit 1; }
+
+      - name: Run router/database protocol tests
+        run: |
+          pip install pytest pytest-asyncio
+          python -m pytest tests/integration/test_router_db_protocol.py -v
+
+      - name: Stop stack
+        if: always()
+        run: docker compose -f docker-compose.local.yml down -v

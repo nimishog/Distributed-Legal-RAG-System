@@ -1,117 +1,53 @@
 # Distributed Legal RAG System
 
-A production-grade distributed Retrieval-Augmented Generation (RAG) system for legal document query answering, demonstrating sharded vector search across 3 database nodes with consistent hashing, built in C++17 with PostgreSQL/pgvector, FastAPI, and React.
+A production-grade distributed Retrieval-Augmented Generation (RAG) system for
+legal document question answering. Sharded vector search across 3 C++ database
+nodes with consistent hashing, PostgreSQL/pgvector, FastAPI, and React.
 
-**Live Demo:** https://nimish-legal-rag.duckdns.org (running on a single t3.micro via swap-backed scale-to-zero)
-
-![Architecture](docs/architecture.png)
+- **Frontend (Vercel):** https://distributed-legal-rag.vercel.app
+- **Backend (AWS):** https://nimish-legal-rag.duckdns.org (single t3.micro + 2 GB swap)
 
 ---
 
-## Architecture Overview
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              PRODUCTION (ap-south-1)                        │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  Vercel (Frontend)                                                         │
-│  distributed-rag.vercel.app                                                │
-│        │                                                                    │
-│        ▼                                                                    │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │ EC2 t3.micro (1 GB RAM + 2 GB Swap) - $0 Free Tier / ~$7.50/mo      │  │
-│  │                                                                       │  │
-│  │ ┌─────────────┐  ┌─────────────────────────────────────────────────┐ │  │
-│  │ │   Nginx     │  │           FastAPI Gateway (:8000)               │ │  │
-│  │ │  :80/:443   │──▶│  • Router TCP client (pool, max 2 conn)       │ │  │
-│  │ │  (Certbot)  │  │  • OpenAI GPT-4o-mini                           │ │  │
-│  │ └─────────────┘  │  • /ask endpoint (non-streaming)                │ │  │
-│  │                  │  • Rate limit: 2 concurrent requests            │ │  │
-│  │                  └────────────────────────┬────────────────────────┘ │  │
-│  │                                           │ TCP :8080                │  │
-│  │                  ┌────────────────────────┼────────────────────────┐ │  │
-│  │                  │ docker-compose.prod.yml                       │ │  │
-│  │                  │ ┌─────────┐ ┌──────────┐ ┌──────────┐        │ │  │
-│  │                  │ │Postgres │ │cpp_db_0  │ │cpp_db_1  │        │ │  │
-│  │                  │ │+pgvector│ │(shard 0) │ │(shard 1) │        │ │  │
-│  │                  │ │ :5432   │ │ :8081    │ │ :8082    │        │ │  │
-│  │                  │ └────┬────┘ └────┬─────┘ └────┬─────┘        │ │  │
-│  │                  │      │           │           │               │ │  │
-│  │                  │ ┌────┴────┐ ┌────┴─────┐ ┌────┴─────┐        │ │  │
-│  │                  │ │cpp_db_2 │ │ cpp_router│            │        │ │  │
-│  │                  │ │(shard 2)│ │  :8080    │            │        │ │  │
-│  │                  │ │ :8083   │ │           │            │        │ │  │
-│  │                  │ └─────────┘ └───────────┘            │        │ │  │
-│  │                  └──────────────────────────────────────┘        │  │
-│  └────────────────────────────────────────────────────────────────────┘  │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│  React SPA (Vercel)  https://distributed-legal-rag.vercel.app        │
+└───────────────────────────────┬──────────────────────────────────────┘
+                                │ HTTPS
+┌───────────────────────────────▼──────────────────────────────────────┐
+│  EC2 t3.micro (1 GB RAM + 2 GB swap) - $0 Free Tier / ~$7.50/mo       │
+│                                                                      │
+│  Nginx :443 ──▶ FastAPI Gateway :8000 ──TCP──▶ C++ Router :8080      │
+│                                            (consistent hashing)       │
+│                          ┌───────────────┬───────────────┐           │
+│                          ▼               ▼               ▼           │
+│                     cpp_db_0        cpp_db_1        cpp_db_2         │
+│                       :8081           :8081           :8081          │
+│                          └───────────────┼───────────────┘           │
+│                                          ▼                           │
+│                              PostgreSQL 16 + pgvector :5432           │
+└──────────────────────────────────────────────────────────────────────┘
 ```
+
+Production runs **one shared PostgreSQL** instance; the three C++ nodes shard
+the *write/read path* by consistent hashing and fan search out to all of them.
+Local development runs **three separate PostgreSQL instances** so sharding can
+be observed end to end.
 
 ### Key Components
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
-| **Frontend** | React 18 + Vite | Chat interface, deployed on Vercel |
+| **Frontend** | React 18 + Vite | Chat UI, deployed on Vercel |
 | **API Gateway** | FastAPI + Uvicorn | REST API, LLM orchestration, rate limiting |
-| **Router** | C++17 (TCP) | Consistent hashing, connection pooling, health checks |
+| **Router** | C++17 (TCP) | Consistent hashing, scatter-gather search, broadcast deletes |
 | **Database Nodes** | C++17 + libpqxx | 3 shards, pgvector HNSW index, binary protocol |
-| **Vector DB** | PostgreSQL 16 + pgvector | 768-dim embeddings, cosine similarity |
-| **Embeddings** | sentence-transformers/all-mpnet-base-v2 | 768-dim, batch inference |
+| **Vector DB** | PostgreSQL 16 + pgvector | 384-dim embeddings, cosine similarity |
+| **Embeddings** | sentence-transformers/all-MiniLM-L6-v2 | 384-dim, async inference |
 | **LLM** | OpenAI GPT-4o-mini | RAG generation |
 | **Monitoring** | Prometheus + Grafana | Local development observability |
-
----
-
-## Demo vs. Enterprise Architecture
-
-### Demo Architecture (This Repository)
-- **Single t3.micro** (1 GB RAM + 2 GB swap)
-- **2 GB swap file** prevents OOM kills during spikes
-- **Rate limited** to 2 concurrent queries
-- **1000 chunk cap** keeps HNSW index < 50 MB
-- **Cost**: $0 (AWS Free Tier) or ~$7.50/mo
-- **Purpose**: Live portfolio demo, 24/7 availability
-
-### Enterprise Architecture (Production Scale)
-```
-                    ┌─────────────┐
-                    │   ALB/WAF   │
-                    └──────┬──────┘
-                           │
-              ┌────────────┼────────────┐
-              ▼            ▼            ▼
-         ┌─────────┐  ┌─────────┐  ┌─────────┐
-         │ FastAPI │  │ FastAPI │  │ FastAPI │  ← Auto-scaling group
-         └────┬────┘  └────┬────┘  └────┬────┘
-              │            │            │
-              └────────────┼────────────┘
-                           ▼
-                    ┌─────────────┐
-                    │ cpp_router  │  ← ECS Fargate Service (3+ tasks)
-                    │ (CloudMap)  │
-                    └──────┬──────┘
-                           │
-              ┌────────────┼────────────┐
-              ▼            ▼            ▼
-         ┌─────────┐  ┌─────────┐  ┌─────────┐
-         │ DB Shard│  │ DB Shard│  │ DB Shard│  ← ECS Fargate (3 tasks each)
-         │   0     │  │   1     │  │   2     │
-         └────┬────┘  └────┬────┘  └────┬────┘
-              │            │            │
-              └────────────┼────────────┘
-                           ▼
-                    ┌─────────────┐
-                    │ RDS Aurora  │  ← db.r6g.xlarge (memory-optimized)
-                    │ PostgreSQL  │     pgvector, read replicas
-                    └─────────────┘
-```
-- **Horizontal scaling**: ECS Fargate auto-scaling (CPU/memory triggers)
-- **Managed PostgreSQL**: RDS Aurora with pgvector, read replicas
-- **Service Discovery**: AWS CloudMap for router↔DB communication
-- **Connection Pooling**: PgBouncer / RDS Proxy
-- **Cost**: ~$500-2000/mo depending on traffic
 
 ---
 
@@ -119,139 +55,96 @@ A production-grade distributed Retrieval-Augmented Generation (RAG) system for l
 
 ### Prerequisites
 - Docker 24+ and Docker Compose v2
-- Python 3.11+ (for ingestion)
-- Node.js 18+ (for frontend)
-- k6 (for load testing)
-- NVIDIA GPU with CUDA (optional, for fast embeddings)
+- Python 3.11+ (for ingestion/tests)
+- Node.js 18+ (for frontend tests)
+- k6 (optional, for load testing)
 
-### 1. Clone and Configure
+### 1. Configure
 ```bash
-git clone https://github.com/yourusername/distributed-legal-rag.git
-cd distributed-legal-rag
 cp .env.example .env
-# Edit .env with your OpenAI API key
+# Add your OpenAI API key to .env
 ```
 
-### 2. Start Full Stack
+### 2. Start the full stack
 ```bash
 make up
 ```
-Wait ~30 seconds for all services to become healthy.
+This starts three independent PostgreSQL shards, the C++ router, the API
+gateway, the frontend, Prometheus, Grafana, and the metric exporters. Wait
+~30 seconds for health checks to pass.
 
-### 3. Ingest Legal Data
+### 3. Ingest legal data
 ```bash
 make ingest
 ```
-Downloads LegalBench-RAG-mini, chunks, embeds, and loads into the cluster.
+Downloads LegalBench, chunks it, embeds it with MiniLM (384-d), and loads it
+through the router.
 
-### 4. Test the System
+### 4. Test the system
 ```bash
-# Health checks
 make health
 
-# Query the API
-curl -X POST http://localhost:8000/ask \
+curl -X POST http://localhost:8000/api/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "What is the statute of limitations for contract disputes in California?"}'
 
-# Open Frontend
-open http://localhost:5173
-
-# Open Grafana
-make grafana  # http://localhost:3000 (admin/admin)
-```
-
----
-
-## Project Structure
-
-```
-distributed_legal_rag/
-├── .github/workflows/          # CI/CD pipelines
-├── cpp_database/               # Vector DB Node (C++17)
-│   ├── include/                # Headers: storage, postgres, vector_math
-│   ├── src/                    # Implementation
-│   └── tests/                  # GTest unit tests
-├── cpp_router/                 # Sharding Router (C++17)
-│   ├── include/                # Headers: router, hash_ring
-│   ├── src/                    # Implementation
-│   └── tests/                  # GTest unit tests
-├── data_ingestion/             # Offline Pipeline (Python)
-│   ├── src/                    # fetch, chunk, embed, socket_client
-│   └── tests/                  # Pytest
-├── api_gateway/                # FastAPI Middleware (Python)
-│   ├── src/                    # routers, services, schemas
-│   └── tests/                  # Pytest
-├── frontend/                   # React + Vite (Vercel)
-│   ├── src/                    # Components, API client
-│   └── tests/                  # Vitest
-├── deployment/                 # AWS Bootstrap Scripts
-├── docker-compose.local.yml    # Full local dev stack
-├── docker-compose.prod.yml     # Production single-server
-├── docker-compose.ingestion.yml# Ingestion job
-├── init_db.sql                 # pgvector schema + config
-├── prometheus.yml              # Metrics scrape config
-├── grafana-dashboard.json      # Pre-built dashboard
-├── k6-load-test.js             # 10k VU load test
-├── Makefile                    # Common commands
-└── .env.example                # Environment template
+# Frontend:  http://localhost:5173
+# Grafana:   http://localhost:3000 (admin/admin)
 ```
 
 ---
 
 ## TCP Binary Protocol
 
-All C++ services communicate via length-prefixed JSON over TCP:
+All C++ services communicate over TCP with a length-prefixed JSON frame. The
+length prefix is a **big-endian** `uint32_t` (network byte order).
 
 ```
-Frame: [uint32_t length (LE)][JSON payload]
+Frame: [uint32_t length (big-endian)][JSON payload]
 
-INSERT:
-{"op":"insert","id":"uuid","text":"...","embedding":[768 floats],"metadata":{}}
+INSERT:       {"op":"insert","id":"<uuid>","text":"...","embedding":[384 floats],"metadata":{}}
+BATCH_INSERT: {"op":"batch_insert","chunks":[{...}, ...]}
+SEARCH:       {"op":"search","embedding":[384 floats],"top_k":10,"filter":{}}
+DELETE:       {"op":"delete","ids":["<uuid>", ...]}
+HEALTH:       {"op":"health"}
 
-SEARCH:
-{"op":"search","embedding":[768 floats],"top_k":10,"filter":{}}
-
-DELETE:
-{"op":"delete","ids":["uuid1","uuid2"]}
-
-RESPONSE:
-{"status":"ok","results":[{"id":"uuid","text":"...","score":0.92,"metadata":{}}]}
-{"status":"error","code":"NOT_FOUND|INVALID_ARG|INTERNAL","message":"..."}
+RESPONSE:     {"status":"ok","results":[{"id":"<uuid>","text":"...","score":0.92,"metadata":{}}],"partial":false}
+ERROR:        {"status":"error","code":"INVALID_ARG|UPSTREAM_FAILED|INTERNAL","message":"..."}
 ```
+
+IDs must be valid UUIDs (`legal_chunks.id` is a PostgreSQL `UUID`).
+
+### Router semantics
+- **search** is a scatter-gather: the router queries every healthy shard,
+  deduplicates results by id (keeping the highest score), sorts by score, and
+  returns the top-k. The `partial` flag is `true` if any shard failed.
+- **insert / batch_insert** are written to the primary shard and its replica.
+- **delete** is broadcast to every shard.
+- **health** is answered locally by the router.
 
 ---
 
 ## Consistent Hashing
 
-- **Algorithm**: SHA-256(key) → uint64 (first 8 bytes)
-- **Virtual Nodes**: 50 per physical shard (150 total)
-- **Replication Factor**: 2 (primary + 1 replica)
-- **Health Checks**: TCP ping every 10s, automatic redistribution
+- **Algorithm:** SHA-256(key) → uint64
+- **Virtual nodes:** 50 per physical shard (150 total)
+- **Replication factor:** 2 (primary + replica)
+- **Health checks:** TCP ping every 10s; a node is marked unhealthy after 3
+  consecutive failures
 
 ---
 
-## Load Testing
+## Configuration
 
-Run from your local machine against the live demo:
-
-```bash
-# Install k6
-brew install k6  # macOS
-# or: sudo apt install k6  # Ubuntu
-
-# Run 10k VU test
-make load-test-prod
-# Enter: https://nimish-legal-rag.duckdns.org
-```
-
-**Expected Results on t3.micro:**
-- p50 latency: ~200-500ms
-- p95 latency: ~2-5s (queueing due to 2-connection limit)
-- Error rate: Increases >500 VUs (connection pool exhaustion)
-- OOM risk: Swap absorbs spikes, but sustained load will thrash
-
-This **demonstrates the breaking point honestly** — a senior engineering practice.
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | 384-dim embedding model |
+| `EMBEDDING_DEVICE` | `cpu` | Embedding device |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Generation model |
+| `RATE_LIMIT_CONCURRENT` | `2` | Max concurrent `/api/ask` requests |
+| `CORS_ORIGINS` | Vercel origin | Allowed browser origins (from `.env`) |
+| `CORS_ORIGIN_REGEX` | _(empty)_ | Optional regex for Vercel preview deployments |
+| `API_KEY` | _(empty)_ | Optional gateway API key (unset = open) |
 
 ---
 
@@ -262,41 +155,47 @@ make help           # Show all commands
 make build          # Build all images
 make up             # Start local stack
 make down           # Stop stack
-make logs           # Follow all logs
-make test           # Run all tests
+make logs           # Follow logs
+make test           # Run all tests (C++ + Python + frontend)
 make ingest         # Run ingestion pipeline
-make load-test      # Run k6 locally
+make health         # Health checks
 make clean          # Remove everything
-make prune          # Nuclear docker cleanup
 ```
 
 ---
 
 ## Deployment
 
-### One-Time AWS Setup
+### One-time AWS setup
 ```bash
-# Configure AWS CLI
 aws configure
-
-# Run bootstrap (creates VPC, SG, EC2, IAM)
-./deployment/aws_setup.sh
+./deployment/aws_setup.sh   # VPC, subnets, SG, t3.micro, IAM role, key pair
 ```
 
-### GitHub Actions Deployment
-1. Add secrets to GitHub repository:
-   - `OPENAI_API_KEY`
-   - `KAGGLE_USERNAME`, `KAGGLE_KEY`
-   - `EC2_HOST`, `EC2_SSH_KEY`
-   - `DB_PASSWORD`
-2. Push to `main` branch → Automatic build + deploy
-3. Manual workflows: `ingest.yml`, `load-test.yml`
-
-### SSL Certificate (Let's Encrypt)
+### Secrets (file-based, no Swarm)
+On the EC2 host:
 ```bash
-# On EC2 after deploy
-sudo certbot --nginx -d nimish-legal-rag.duckdns.org
-# Auto-renewal via cron
+mkdir -p secrets && chmod 700 secrets
+printf '%s' "$DB_PASSWORD"    > secrets/DB_PASSWORD
+printf '%s' "$OPENAI_API_KEY" > secrets/openai_api_key
+printf '%s' "$API_KEY"        > secrets/api_key   # optional
+```
+
+### GitHub Actions
+1. Add repository secrets: `EC2_HOST`, `EC2_SSH_KEY`, `DB_PASSWORD`,
+   `OPENAI_API_KEY`, `API_KEY` (optional), `GHCR_TOKEN` (only if packages are
+   private).
+2. Push to `main` → images are built and pushed to GHCR, then pulled and
+   deployed on EC2.
+3. Manual workflows: `ingest.yml` (runs ingestion on EC2), `load-test.yml`.
+
+### SSL (Let's Encrypt)
+```bash
+sudo docker run --rm \
+  -v "$(pwd)/certbot/conf:/etc/letsencrypt" \
+  -v "$(pwd)/certbot/www:/var/www/certbot" \
+  certbot/certbot certonly --webroot -w /var/www/certbot \
+  -d nimish-legal-rag.duckdns.org
 ```
 
 ---
@@ -308,12 +207,9 @@ sudo certbot --nginx -d nimish-legal-rag.duckdns.org
 | Prometheus | http://localhost:9090 | - |
 | Grafana | http://localhost:3000 | admin / admin |
 
-Pre-built dashboard includes:
-- System RAM/Swap/CPU
-- Router/DB/API request rates & latency (p50/p95/p99)
-- Container memory usage
-- LLM token throughput
-- Service health status
+The dashboard (provisioned from `grafana-dashboard.json`) shows host
+RAM/swap/CPU (node-exporter), API Gateway and LLM metrics, Postgres stats
+(postgres_exporter), container memory (cAdvisor), and scrape health.
 
 ---
 
@@ -321,16 +217,19 @@ Pre-built dashboard includes:
 
 | Resource | Monthly Cost (ap-south-1) |
 |----------|---------------------------|
-| EC2 t3.micro (24/7) | $7.50 (Free Tier: $0 first 12mo) |
-| EBS 30 GB | $3.00 |
-| Data Transfer (est.) | $1-5 |
+| EC2 t3.micro (24/7) | $7.50 (Free Tier: $0 first 12 months) |
+| EBS 16 GB | ~$1.60 |
+| Data transfer (est.) | $1-5 |
 | **Total** | **~$10-15/mo** ($0 on Free Tier) |
+
+The 16 GB root volume is recommended because CPU-only PyTorch keeps the API
+image near 1 GB; `docker image prune -f` is run after each deploy.
 
 ---
 
 ## License
 
-MIT License - See LICENSE file for details.
+MIT License - see LICENSE file for details.
 
 ---
 
@@ -338,5 +237,5 @@ MIT License - See LICENSE file for details.
 
 - [pgvector](https://github.com/pgvector/pgvector) for vector similarity in PostgreSQL
 - [sentence-transformers](https://www.sbert.net/) for embeddings
-- [LegalBench](https://github.com/nguha/legalbench) for legal dataset
+- [LegalBench](https://github.com/nguha/legalbench) for the legal dataset
 - [OpenAI](https://openai.com/) for GPT-4o-mini

@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     pkg-config \
     netcat-openbsd \
+    curl \
     && rm -rf /var/lib/apt/lists/* \
     && ldconfig
 

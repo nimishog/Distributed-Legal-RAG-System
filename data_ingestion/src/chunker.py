@@ -1,6 +1,8 @@
 import re
 import os
 import json
+import uuid
+import hashlib
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -58,7 +60,14 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
             "char_length": len(chunk_text),
             "token_estimate": len(chunk_text.split())
         })
+        chunk_id = str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                hashlib.sha256(chunk_text.encode("utf-8")).hexdigest(),
+            )
+        )
         results.append({
+            "id": chunk_id,
             "text": chunk_text,
             "metadata": chunk_metadata
         })
@@ -67,7 +76,7 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def main():
     print(f"Loading documents from {INPUT_FILE}...")
-    with open(INPUT_FILE) as f:
+    with open(INPUT_FILE, encoding="utf-8") as f:
         documents = json.load(f)
 
     all_chunks = []
@@ -80,7 +89,7 @@ def main():
     print(f"Created {len(all_chunks)} chunks (max: {MAX_CHUNKS})")
 
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(OUTPUT_FILE, "w") as f:
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump(all_chunks, f, indent=2)
 
     print(f"Saved chunks to {OUTPUT_FILE}")

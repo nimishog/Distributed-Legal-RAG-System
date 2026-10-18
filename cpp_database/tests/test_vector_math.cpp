@@ -59,9 +59,9 @@ TEST(VectorMathTest, CosineSimilarityZeroVector) {
     EXPECT_FLOAT_EQ(cosine_similarity(a, b), 0.0f);
 }
 
-TEST(VectorMathTest, CosineSimilarity768Dim) {
-    std::vector<float> a(768, 0.0f);
-    std::vector<float> b(768, 0.0f);
+TEST(VectorMathTest, CosineSimilarity384Dim) {
+    std::vector<float> a(384, 0.0f);
+    std::vector<float> b(384, 0.0f);
     a[0] = 1.0f;
     b[0] = 1.0f;
     EXPECT_FLOAT_EQ(cosine_similarity(a, b), 1.0f);
@@ -69,8 +69,8 @@ TEST(VectorMathTest, CosineSimilarity768Dim) {
 
 TEST(VectorMathTest, AVX2PathsCompile) {
 #if defined(__AVX2__) || defined(__AVX__)
-    std::vector<float> a(768, 0.1f);
-    std::vector<float> b(768, 0.2f);
+    std::vector<float> a(384, 0.1f);
+    std::vector<float> b(384, 0.2f);
     float result = 0.0f;
     dot_product_avx2(a.data(), b.data(), a.size(), result);
     EXPECT_NEAR(result, dot_product(a, b), 1e-5);

@@ -1,6 +1,15 @@
 from pydantic_settings import BaseSettings
 from pydantic import Field
 from functools import lru_cache
+from pathlib import Path
+
+
+def read_secret(secret_name: str) -> str:
+    """Read a secret from Docker secrets directory."""
+    secret_path = Path(f"/run/secrets/{secret_name}")
+    if secret_path.exists():
+        return secret_path.read_text().strip()
+    return ""
 
 
 class Settings(BaseSettings):
@@ -18,12 +27,21 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     embedding_model: str = Field(
-        default="sentence-transformers/all-mpnet-base-v2",
+        default="sentence-transformers/all-MiniLM-L6-v2",
         alias="EMBEDDING_MODEL"
     )
     embedding_device: str = Field(default="cpu", alias="EMBEDDING_DEVICE")
 
     rate_limit_concurrent: int = Field(default=2, alias="RATE_LIMIT_CONCURRENT")
+
+    cors_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost:5173", "https://nimish-legal-rag.duckdns.org"],
+        alias="CORS_ORIGINS"
+    )
+    cors_allow_credentials: bool = Field(default=False, alias="CORS_ALLOW_CREDENTIALS")
+    cors_origin_regex: str = Field(default="", alias="CORS_ORIGIN_REGEX")
+
+    api_key: str = Field(default="", alias="API_KEY")
 
     class Config:
         env_file = ".env"
@@ -34,4 +52,10 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    # Override with Docker secrets if available
+    if not settings.openai_api_key:
+        settings.openai_api_key = read_secret("openai_api_key")
+    if not settings.api_key:
+        settings.api_key = read_secret("api_key")
+    return settings

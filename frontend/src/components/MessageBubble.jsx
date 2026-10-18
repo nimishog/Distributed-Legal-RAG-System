@@ -31,7 +31,8 @@ const Bubble = styled.div`
   border: ${({ $isError }) => ($isError ? '1px solid #ef4444' : 'none')};
   box-shadow: ${({ $isUser }) =>
     $isUser ? '0 4px 16px rgba(14, 165, 233, 0.3)' : '0 2px 8px rgba(0, 0, 0, 0.2)'};
-  border-bottom-${({ $isUser }) => ($isUser ? 'right' : 'left')}-radius: 4px;
+  border-bottom-right-radius: ${({ $isUser }) => ($isUser ? '4px' : '0')};
+  border-bottom-left-radius: ${({ $isUser }) => ($isUser ? '0' : '4px')};
   white-space: pre-wrap;
   word-wrap: break-word;
 `;
@@ -199,7 +200,7 @@ function MessageBubble({ message, index }) {
           </div>
 
           {citations.map((citation, idx) => (
-            <CitationItem key={citation.source_id}>
+            <CitationItem key={citation.source_id || idx}>
               <CitationHeader>
                 <CitationIndex>{citation.index}</CitationIndex>
                 <span className="font-medium text-white">

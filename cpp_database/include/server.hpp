@@ -6,10 +6,12 @@
 #include <string>
 #include <cstdint>
 #include <functional>
+#include <atomic>
+#include <chrono>
 
 class Server {
 public:
-    explicit Server(int port, StoragePtr storage);
+    Server(int port, StoragePtr storage, size_t worker_threads = 4, size_t max_queue_size = 1000);
     ~Server();
 
     bool start();
@@ -24,9 +26,13 @@ private:
 
     int port_;
     int server_fd_;
-    ThreadPool pool_;
+    // storage_ is declared before pool_ so that pool_ (and its worker
+    // threads) is destroyed first during shutdown. This guarantees no worker
+    // thread is still touching storage_ when it is destroyed.
     StoragePtr storage_;
-    bool running_;
+    ThreadPool pool_;
+    std::atomic<bool> running_;
+    std::chrono::seconds shutdown_timeout_{30};
 };
 
 #endif

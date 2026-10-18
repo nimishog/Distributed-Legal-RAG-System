@@ -1,14 +1,20 @@
+# ==========================================
+# Local Development Stack - Real sharding
+# Each cpp_database shard owns its own PostgreSQL instance.
+# Usage: docker compose -f docker-compose.local.yml up -d
+# ==========================================
+
 services:
-  postgres:
+  postgres_0:
     image: pgvector/pgvector:pg16
-    container_name: legal-rag-postgres
+    container_name: legal-rag-postgres-0
     environment:
       POSTGRES_DB: legal_rag
       POSTGRES_USER: rag_user
       POSTGRES_PASSWORD: localdev
     volumes:
       - ./init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
-      - pgdata:/var/lib/postgresql/data
+      - pgdata_0:/var/lib/postgresql/data
     ports:
       - "5433:5432"
     healthcheck:
@@ -19,8 +25,52 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
-        reservations:
+          memory: 512M
+    restart: unless-stopped
+
+  postgres_1:
+    image: pgvector/pgvector:pg16
+    container_name: legal-rag-postgres-1
+    environment:
+      POSTGRES_DB: legal_rag
+      POSTGRES_USER: rag_user
+      POSTGRES_PASSWORD: localdev
+    volumes:
+      - ./init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
+      - pgdata_1:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag_user -d legal_rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    restart: unless-stopped
+
+  postgres_2:
+    image: pgvector/pgvector:pg16
+    container_name: legal-rag-postgres-2
+    environment:
+      POSTGRES_DB: legal_rag
+      POSTGRES_USER: rag_user
+      POSTGRES_PASSWORD: localdev
+    volumes:
+      - ./init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
+      - pgdata_2:/var/lib/postgresql/data
+    ports:
+      - "5435:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag_user -d legal_rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
           memory: 512M
     restart: unless-stopped
 
@@ -29,23 +79,26 @@ services:
       context: ./cpp_database
       dockerfile: Dockerfile
     container_name: legal-rag-db-0
+    entrypoint: ["/app/build/database_server"]
     environment:
-      DB_HOST: postgres
+      DB_HOST: postgres_0
       DB_PORT: 5432
       DB_NAME: legal_rag
       DB_USER: rag_user
       DB_PASSWORD: localdev
       DB_SHARD_ID: 0
       SERVER_PORT: 8081
+      DB_WORKER_THREADS: 4
+      DB_MAX_QUEUE: 1000
     ports:
       - "8081:8081"
     depends_on:
-      postgres:
+      postgres_0:
         condition: service_healthy
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 256M
     restart: unless-stopped
 
   cpp_database_1:
@@ -55,22 +108,24 @@ services:
     container_name: legal-rag-db-1
     entrypoint: ["/app/build/database_server"]
     environment:
-      DB_HOST: postgres
+      DB_HOST: postgres_1
       DB_PORT: 5432
       DB_NAME: legal_rag
       DB_USER: rag_user
       DB_PASSWORD: localdev
       DB_SHARD_ID: 1
       SERVER_PORT: 8081
+      DB_WORKER_THREADS: 4
+      DB_MAX_QUEUE: 1000
     ports:
       - "8082:8081"
     depends_on:
-      postgres:
+      postgres_1:
         condition: service_healthy
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 256M
     restart: unless-stopped
 
   cpp_database_2:
@@ -80,22 +135,24 @@ services:
     container_name: legal-rag-db-2
     entrypoint: ["/app/build/database_server"]
     environment:
-      DB_HOST: postgres
+      DB_HOST: postgres_2
       DB_PORT: 5432
       DB_NAME: legal_rag
       DB_USER: rag_user
       DB_PASSWORD: localdev
       DB_SHARD_ID: 2
       SERVER_PORT: 8081
+      DB_WORKER_THREADS: 4
+      DB_MAX_QUEUE: 1000
     ports:
       - "8083:8081"
     depends_on:
-      postgres:
+      postgres_2:
         condition: service_healthy
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 256M
     restart: unless-stopped
 
   cpp_router:
@@ -104,10 +161,14 @@ services:
       dockerfile: Dockerfile
     container_name: legal-rag-router
     environment:
-      DB_NODES: cpp_database_0:8081,cpp_database_1:8081,cpp_database_2:8081
-      ROUTER_PORT: 8080
+      - DB_NODES=cpp_database_0:8081,cpp_database_1:8081,cpp_database_2:8081
+      - ROUTER_PORT=8080
+      - ROUTER_HTTP_PORT=8084
+      - ROUTER_WORKER_THREADS=4
+      - ROUTER_MAX_QUEUE=1000
     ports:
       - "8080:8080"
+      - "8084:8084"
     depends_on:
       - cpp_database_0
       - cpp_database_1
@@ -118,10 +179,11 @@ services:
           memory: 256M
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 8080"]
+      test: ["CMD", "curl", "-f", "http://localhost:8084/health"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
   api_gateway:
     build:
@@ -129,11 +191,14 @@ services:
       dockerfile: Dockerfile
     container_name: legal-rag-api
     environment:
-      ROUTER_HOST: cpp_router
-      ROUTER_PORT: 8080
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      ROUTER_POOL_SIZE: 2
-      LOG_LEVEL: DEBUG
+      - ROUTER_HOST=cpp_router
+      - ROUTER_PORT=8080
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ROUTER_POOL_SIZE=2
+      - LOG_LEVEL=INFO
+      - 'CORS_ORIGINS=["http://localhost:5173","http://localhost:8080"]'
+      - CORS_ALLOW_CREDENTIALS=false
+      - API_KEY=${API_KEY}
     ports:
       - "8000:8000"
     depends_on:
@@ -145,10 +210,49 @@ services:
           memory: 512M
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=5).status==200 else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    container_name: legal-rag-frontend
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api_gateway
+    restart: unless-stopped
+
+  # Profiled ingestion service: run with
+  #   docker compose --profile ingest run --rm ingestion
+  ingestion:
+    build:
+      context: ./data_ingestion
+      dockerfile: Dockerfile
+    profiles: ["ingest"]
+    container_name: legal-rag-ingestion
+    environment:
+      - ROUTER_HOST=cpp_router
+      - ROUTER_PORT=8080
+      - MAX_INGESTION_CHUNKS=${MAX_INGESTION_CHUNKS:-1000}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      - EMBEDDING_BATCH_SIZE=${EMBEDDING_BATCH_SIZE:-32}
+      - EMBEDDING_DEVICE=${EMBEDDING_DEVICE:-cpu}
+    depends_on:
+      cpp_router:
+        condition: service_healthy
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 450M
 
   prometheus:
     image: prom/prometheus:v2.47.0
@@ -160,8 +264,6 @@ services:
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
     restart: unless-stopped
 
   grafana:
@@ -172,6 +274,8 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: admin
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
+      - ./provisioning/datasource.yaml:/etc/grafana/provisioning/datasources/datasource.yaml:ro
+      - ./provisioning/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml:ro
       - ./grafana-dashboard.json:/var/lib/grafana/dashboards/home.json:ro
       - grafana-data:/var/lib/grafana
     ports:
@@ -180,19 +284,49 @@ services:
       - prometheus
     restart: unless-stopped
 
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: legal-rag-frontend
+  postgres_exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: legal-rag-postgres-exporter
     environment:
-      VITE_API_URL: http://localhost:8000
+      DATA_SOURCE_NAME: "postgresql://rag_user:localdev@postgres_0:5432/legal_rag?sslmode=disable"
     ports:
-      - "5173:5173"
+      - "9187:9187"
     depends_on:
-      - api_gateway
+      - postgres_0
+    restart: unless-stopped
+
+  node_exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: legal-rag-node-exporter
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    ports:
+      - "9100:9100"
+    restart: unless-stopped
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: legal-rag-cadvisor
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    ports:
+      - "8085:8080"
     restart: unless-stopped
 
 volumes:
-  pgdata:
+  pgdata_0:
+  pgdata_1:
+  pgdata_2:
   grafana-data:

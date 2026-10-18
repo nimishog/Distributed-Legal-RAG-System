@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { apiClient, checkHealth, checkSystemHealth } from '../src/api/axios_client';
+import ChatInterface from '../src/components/ChatInterface';
 
 describe('API Client', () => {
   beforeEach(() => {
@@ -45,5 +47,76 @@ describe('API Client', () => {
     apiClient.get = vi.fn().mockRejectedValue(error);
 
     await expect(checkHealth()).rejects.toMatchObject({ response: { status: 429 } });
+  });
+});
+
+describe('ChatInterface component', () => {
+  it('renders the input and send button', () => {
+    render(
+      <ChatInterface
+        messages={[]}
+        isLoading={false}
+        error={null}
+        onSendMessage={() => {}}
+        onClearChat={() => {}}
+        onDismissError={() => {}}
+      />
+    );
+
+    expect(screen.getByLabelText('Legal question input')).toBeInTheDocument();
+    expect(screen.getByLabelText('Send question')).toBeInTheDocument();
+  });
+
+  it('shows suggested questions when empty', () => {
+    render(
+      <ChatInterface
+        messages={[]}
+        isLoading={false}
+        error={null}
+        onSendMessage={() => {}}
+        onClearChat={() => {}}
+        onDismissError={() => {}}
+      />
+    );
+
+    expect(screen.getByText(/Ask a legal question/i)).toBeInTheDocument();
+  });
+
+  it('sends a message on submit', () => {
+    const onSendMessage = vi.fn();
+    render(
+      <ChatInterface
+        messages={[]}
+        isLoading={false}
+        error={null}
+        onSendMessage={onSendMessage}
+        onClearChat={() => {}}
+        onDismissError={() => {}}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText('Legal question input'), {
+      target: { value: 'What is a contract?' },
+    });
+    fireEvent.click(screen.getByLabelText('Send question'));
+
+    expect(onSendMessage).toHaveBeenCalledWith('What is a contract?');
+  });
+
+  it('dismisses an error when the dismiss button is clicked', () => {
+    const onDismissError = vi.fn();
+    render(
+      <ChatInterface
+        messages={[]}
+        isLoading={false}
+        error="Something went wrong"
+        onSendMessage={() => {}}
+        onClearChat={() => {}}
+        onDismissError={onDismissError}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText('Dismiss error'));
+    expect(onDismissError).toHaveBeenCalled();
   });
 });

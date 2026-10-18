@@ -17,69 +17,46 @@ on:
           - production
           - staging
 
-env:
-  REGION: ap-south-1
-  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com
-
 jobs:
   ingest:
     name: Run Data Ingestion Pipeline
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.REGION }}
-
-      - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Pull Latest Images
-        run: |
-          docker pull $ECR_REGISTRY/cpp_router:latest
-          docker pull $ECR_REGISTRY/cpp_database:latest
-          docker pull $ECR_REGISTRY/data_ingestion:latest
-
-      - name: Run Ingestion (Production)
+      - name: Run ingestion on EC2 (production)
         if: github.event.inputs.target == 'production'
         env:
-          ROUTER_HOST: ${{ secrets.PROD_ROUTER_HOST }}
-          ROUTER_PORT: 8080
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
           MAX_INGESTION_CHUNKS: ${{ github.event.inputs.max_chunks }}
-          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         run: |
-          docker compose -f docker-compose.ingestion.yml up --build --abort-on-container-exit \
-            -e ROUTER_HOST=$ROUTER_HOST \
-            -e ROUTER_PORT=$ROUTER_PORT \
-            -e MAX_INGESTION_CHUNKS=$MAX_INGESTION_CHUNKS \
-            -e KAGGLE_USERNAME=$KAGGLE_USERNAME \
-            -e KAGGLE_KEY=$KAGGLE_KEY \
-            -e DB_PASSWORD=$DB_PASSWORD
+          echo "$EC2_SSH_KEY" > /tmp/ec2_key
+          chmod 600 /tmp/ec2_key
+          ssh -i /tmp/ec2_key -o StrictHostKeyChecking=accept-new ec2-user@$EC2_HOST \
+            "bash -s" -- "$GHCR_TOKEN" "$MAX_INGESTION_CHUNKS" "${{ github.sha }}" <<'REMOTE'
+            set -euo pipefail
+            GHCR_TOKEN="$1"; MAX_INGESTION_CHUNKS="$2"; IMAGE_TAG="$3"
+            cd /opt/legal-rag
+            export IMAGE_TAG
 
-      - name: Run Ingestion (Staging)
+            if [ -n "$GHCR_TOKEN" ]; then
+              echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+            fi
+
+            docker compose -f docker-compose.prod.yml pull ingestion cpp_router cpp_database
+            MAX_INGESTION_CHUNKS="$MAX_INGESTION_CHUNKS" \
+              docker compose -f docker-compose.prod.yml --profile ingest run --rm ingestion
+          REMOTE
+
+      - name: Run ingestion locally (staging)
         if: github.event.inputs.target == 'staging'
         env:
-          ROUTER_HOST: localhost
-          ROUTER_PORT: 8080
           MAX_INGESTION_CHUNKS: ${{ github.event.inputs.max_chunks }}
-          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
-          DB_PASSWORD: localdev
         run: |
-          docker compose -f docker-compose.ingestion.yml up --build --abort-on-container-exit
-
-      - name: Verify Ingestion
-        run: |
-          sleep 10
-          # Test search
-          curl -X POST $API_URL/api/ask \
-            -H "Content-Type: application/json" \
-            -d '{"question": "What is a contract?", "top_k": 3}' | jq .
+          docker compose -f docker-compose.local.yml up -d
+          MAX_INGESTION_CHUNKS="$MAX_INGESTION_CHUNKS" \
+            docker compose -f docker-compose.local.yml --profile ingest run --rm ingestion

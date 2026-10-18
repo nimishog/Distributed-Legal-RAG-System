@@ -65,6 +65,15 @@ class TestAskEndpoint:
         assert response.status_code == 422
 
     @pytest.mark.asyncio
+    async def test_ask_invalid_question_whitespace(self, async_client):
+        response = await async_client.post(
+            "/api/ask",
+            json={"question": "   ", "top_k": 5},
+        )
+
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
     async def test_ask_invalid_top_k_zero(self, async_client):
         response = await async_client.post(
             "/api/ask",
@@ -122,7 +131,7 @@ class TestMetricsEndpoint:
 
         assert response.status_code == 200
         assert "text/plain" in response.headers["content-type"]
-        assert "api_gateway_requests_total" in response.text
+        assert "api_gateway_http_requests_total" in response.text
 
 
 class TestRateLimiting:

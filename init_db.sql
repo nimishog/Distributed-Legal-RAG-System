@@ -12,8 +12,8 @@ CREATE EXTENSION IF NOT EXISTS vector;
 -- Target: t3.micro (1 GB RAM) with 2 GB swap
 -- ==========================================
 
--- Connection limits
-ALTER SYSTEM SET max_connections = 40;
+-- Connection limits (20 is ample for 3 shards on a 1 GB host)
+ALTER SYSTEM SET max_connections = 20;
 ALTER SYSTEM SET superuser_reserved_connections = 3;
 
 -- Memory settings (conservative for 1 GB RAM)
@@ -55,16 +55,16 @@ SELECT pg_reload_conf();
 CREATE TABLE IF NOT EXISTS legal_chunks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     text TEXT NOT NULL,
-    embedding VECTOR(768) NOT NULL,
+    embedding VECTOR(384) NOT NULL,
     metadata JSONB DEFAULT '{}',
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Comments for documentation
-COMMENT ON TABLE legal_chunks IS 'Legal document chunks with 768-dim embeddings (all-mpnet-base-v2)';
+COMMENT ON TABLE legal_chunks IS 'Legal document chunks with 384-dim embeddings (all-MiniLM-L6-v2)';
 COMMENT ON COLUMN legal_chunks.id IS 'Unique chunk identifier';
 COMMENT ON COLUMN legal_chunks.text IS 'Original text content';
-COMMENT ON COLUMN legal_chunks.embedding IS '768-dimensional vector embedding';
+COMMENT ON COLUMN legal_chunks.embedding IS '384-dimensional vector embedding';
 COMMENT ON COLUMN legal_chunks.metadata IS 'JSON metadata: source, page, section, etc.';
 COMMENT ON COLUMN legal_chunks.created_at IS 'Insertion timestamp';
 

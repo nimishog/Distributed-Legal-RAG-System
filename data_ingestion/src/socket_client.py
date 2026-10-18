@@ -1,11 +1,12 @@
 import os
+import sys
 import json
 import socket
 import struct
 from pathlib import Path
 from typing import List, Dict, Any
 
-from src.utils.retry import retry_with_backoff, get_circuit_breaker
+from src.utils.retry import retry_with_backoff_sync as retry_with_backoff, get_circuit_breaker
 
 ROUTER_HOST = os.getenv("ROUTER_HOST", "cpp_router")
 ROUTER_PORT = int(os.getenv("ROUTER_PORT", "8080"))
@@ -25,12 +26,18 @@ CIRCUIT_TIMEOUT = float(os.getenv("CIRCUIT_TIMEOUT", "30.0"))
 DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
 INPUT_FILE = DATA_DIR / "embedded_chunks.json"
 
-_router_circuit_breaker = get_circuit_breaker("ingestion", "router")
+_router_circuit_breaker = get_circuit_breaker(
+    "ingestion",
+    "router",
+    failure_threshold=CIRCUIT_FAILURE_THRESHOLD,
+    success_threshold=CIRCUIT_SUCCESS_THRESHOLD,
+    timeout=CIRCUIT_TIMEOUT,
+)
 
 
 def send_frame(sock: socket.socket, payload: str) -> bool:
     data = payload.encode('utf-8')
-    length = struct.pack('<I', len(data))
+    length = struct.pack('>I', len(data))
     try:
         sock.sendall(length + data)
         return True
@@ -42,7 +49,7 @@ def read_frame(sock: socket.socket) -> str:
     length_data = sock.recv(4)
     if len(length_data) != 4:
         raise ConnectionError("Failed to read frame length")
-    length = struct.unpack('<I', length_data)[0]
+    length = struct.unpack('>I', length_data)[0]
 
     data = bytearray()
     while len(data) < length:
@@ -76,29 +83,47 @@ def send_request(payload: dict) -> dict:
         return result
 
 
+@retry_with_backoff(
+    max_retries=RETRY_MAX_ATTEMPTS,
+    base_delay=RETRY_BASE_DELAY,
+    max_delay=RETRY_MAX_DELAY,
+    exponential_base=RETRY_EXPONENTIAL_BASE,
+    jitter=RETRY_JITTER,
+    retryable_exceptions=(ConnectionError, TimeoutError, OSError, IOError, socket.timeout),
+    circuit_breaker=_router_circuit_breaker,
+    component="ingestion",
+    operation="batch_insert",
+)
 def insert_batch(chunks: List[Dict[str, Any]]) -> bool:
+    # Prepare batch insert request
+    batch_chunks = []
     for chunk in chunks:
-        payload = {
-            "op": "insert",
-            "id": chunk.get("id", f"chunk-{hash(chunk['text'])}"),
+        batch_chunks.append({
+            "id": chunk["id"],
             "text": chunk["text"],
             "embedding": chunk["embedding"],
             "metadata": chunk["metadata"]
-        }
-        try:
-            response = send_request(payload)
-            if response.get("status") != "ok":
-                print(f"Insert failed: {response}")
-                return False
-        except Exception as e:
-            print(f"Insert failed after retries: {e}")
+        })
+    
+    payload = {
+        "op": "batch_insert",
+        "chunks": batch_chunks
+    }
+    
+    try:
+        response = send_request(payload)
+        if response.get("status") != "ok":
+            print(f"Batch insert failed: {response}")
             return False
-    return True
+        return True
+    except Exception as e:
+        print(f"Batch insert failed after retries: {e}")
+        return False
 
 
 def main():
     print(f"Loading embedded chunks from {INPUT_FILE}...")
-    with open(INPUT_FILE) as f:
+    with open(INPUT_FILE, encoding="utf-8") as f:
         chunks = json.load(f)
 
     chunks = chunks[:MAX_INGESTION_CHUNKS]
@@ -110,9 +135,13 @@ def main():
 
         if not insert_batch(batch):
             print(f"Failed to insert batch starting at index {i}")
-            return
+            sys.exit(1)
 
     print("All chunks inserted successfully!")
+
+    if not chunks:
+        print("No chunks to verify (empty input)")
+        return
 
     print("\nVerifying with a test search...")
     test_embedding = chunks[0]["embedding"]

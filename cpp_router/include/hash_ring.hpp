@@ -14,7 +14,10 @@ struct Node {
     int port;
     bool healthy = true;
     uint64_t hash = 0;
+    int consecutive_failures = 0;
 };
+
+static constexpr int HASH_RING_MAX_CONSECUTIVE_FAILURES = 3;
 
 class HashRing {
 public:
@@ -34,6 +37,7 @@ private:
     int virtual_nodes_;
     std::map<uint64_t, Node> ring_;
     std::map<std::string, std::vector<uint64_t>> node_vnodes_;
+    std::map<std::string, int> node_failures_;
     mutable std::mutex mutex_;
 };
 

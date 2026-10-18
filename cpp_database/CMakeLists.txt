@@ -6,13 +6,29 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic -O3 -march=native")
+    # -mavx2 -mfma (instead of -march=native) keeps the produced binary
+    # portable across x86-64 hosts. The AVX2/FMA vector_math routines are
+    # exercised by the unit tests; production similarity search is performed
+    # by pgvector inside PostgreSQL.
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic -O3 -mavx2 -mfma")
 endif()
 
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBPQXX REQUIRED libpqxx)
 pkg_check_modules(LIBPQ REQUIRED libpq)
+
+# Find std::filesystem (C++17)
+if(CMAKE_CXX_STANDARD VERSION_GREATER_EQUAL 17)
+    # std::filesystem is part of C++17 standard library
+    # On some systems it's a separate library (libstdc++fs)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+        find_library(STD_FILESYSTEM stdc++fs)
+        if(STD_FILESYSTEM)
+            set(STD_FILESYSTEM_LIBRARIES ${STD_FILESYSTEM})
+        endif()
+    endif()
+endif()
 
 option(BUILD_TESTS "Build unit tests" ON)
 
@@ -57,6 +73,7 @@ target_link_libraries(database_server PRIVATE
     Threads::Threads
     nlohmann_json::nlohmann_json
     fmt::fmt
+    ${STD_FILESYSTEM_LIBRARIES}
 )
 target_include_directories(database_server PRIVATE ${LIBPQXX_INCLUDE_DIRS} ${LIBPQ_INCLUDE_DIRS})
 target_compile_options(database_server PRIVATE ${LIBPQXX_CFLAGS_OTHER} ${LIBPQ_CFLAGS_OTHER})
@@ -76,6 +93,7 @@ if(BUILD_TESTS)
         ${LIBPQ_LIBRARIES}
         nlohmann_json::nlohmann_json
         fmt::fmt
+        ${STD_FILESYSTEM_LIBRARIES}
     )
     target_include_directories(run_tests PRIVATE ${LIBPQXX_INCLUDE_DIRS} ${LIBPQ_INCLUDE_DIRS})
     target_compile_options(run_tests PRIVATE ${LIBPQXX_CFLAGS_OTHER} ${LIBPQ_CFLAGS_OTHER})

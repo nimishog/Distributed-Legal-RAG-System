@@ -1,35 +1,35 @@
 #!/bin/bash
 # ==========================================
 # EC2 Bootstrap Script for Legal RAG
-# Run on fresh Ubuntu 22.04 t3.micro instance
-# Usage: curl -fsSL https://raw.githubusercontent.com/.../deploy.sh | bash
+# Run on a fresh Amazon Linux 2023 t3.micro instance.
+# Usage: REPO_URL=... DB_PASSWORD=... OPENAI_API_KEY=... ./deploy.sh
 # ==========================================
 
 set -euo pipefail
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # ==========================================
-# Configuration
+# Configuration (override via environment)
 # ==========================================
-REPO_URL="https://github.com/yourusername/distributed-legal-rag.git"
-PROJECT_DIR="/opt/legal-rag"
-DUCKDNS_DOMAIN="nimish-legal-rag.duckdns.org"
-CERTBOT_EMAIL="your-email@example.com"
+REPO_URL="${REPO_URL:-https://github.com/yourusername/distributed-legal-rag.git}"
+PROJECT_DIR="${PROJECT_DIR:-/opt/legal-rag}"
+DUCKDNS_DOMAIN="${DUCKDNS_DOMAIN:-nimish-legal-rag.duckdns.org}"
+CERTBOT_EMAIL="${CERTBOT_EMAIL:-you@example.com}"
+GITHUB_ACTOR="${GITHUB_ACTOR:-$USER}"
 
-# ==========================================
-# Pre-flight checks
-# ==========================================
+: "${DB_PASSWORD:?set DB_PASSWORD in the environment}"
+: "${OPENAI_API_KEY:?set OPENAI_API_KEY in the environment}"
+
 if [[ $EUID -eq 0 ]]; then
-   log_error "Don't run as root! Run as ubuntu user with sudo privileges."
+   log_error "Don't run as root! Run as ec2-user/ubuntu with sudo privileges."
    exit 1
 fi
 
@@ -39,28 +39,19 @@ log_info "Starting Legal RAG deployment bootstrap..."
 # System updates & essential packages
 # ==========================================
 log_info "Updating system packages..."
-sudo apt-get update -y
-sudo apt-get upgrade -y
-sudo apt-get install -y \
-    curl \
-    wget \
-    git \
-    htop \
-    iotop \
-    ncdu \
-    jq \
-    unzip \
-    ca-certificates \
-    gnupg \
-    lsb-release \
-    software-properties-common
+sudo yum update -y || sudo apt-get update -y && sudo apt-get upgrade -y
+if command -v yum >/dev/null 2>&1; then
+    sudo yum install -y curl wget git jq unzip
+else
+    sudo apt-get install -y curl wget git jq unzip
+fi
 
 # ==========================================
 # Create 2GB swap file (critical for t3.micro)
 # ==========================================
-log_info "Creating 2GB swap file..."
+log_info "Ensuring 2GB swap file..."
 if [ ! -f /swapfile ]; then
-    sudo fallocate -l 2G /swapfile
+    sudo fallocate -l 2G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048
     sudo chmod 600 /swapfile
     sudo mkswap /swapfile
     sudo swapon /swapfile
@@ -69,54 +60,29 @@ if [ ! -f /swapfile ]; then
 else
     log_warn "Swap file already exists"
 fi
-
-# Tune swappiness (prefer RAM, swap only when needed)
-log_info "Tuning kernel parameters..."
 echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
 echo 'vm.vfs_cache_pressure=50' | sudo tee -a /etc/sysctl.conf
-sudo sysctl -p
+sudo sysctl -p || true
 
 # ==========================================
-# Install Docker
+# Install Docker (if missing)
 # ==========================================
 log_info "Installing Docker..."
 if ! command -v docker &> /dev/null; then
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-    sudo apt-get update -y
-    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-    sudo usermod -aG docker $USER
+    if command -v yum >/dev/null 2>&1; then
+        sudo yum install -y docker
+        sudo systemctl start docker
+        sudo systemctl enable docker
+    else
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+        sudo apt-get update -y
+        sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+    fi
+    sudo usermod -aG docker "$USER"
     log_info "Docker installed. You may need to log out and back in for group changes."
 else
     log_warn "Docker already installed"
-fi
-
-# ==========================================
-# Install Docker Compose (standalone)
-# ==========================================
-log_info "Installing Docker Compose..."
-if ! command -v docker-compose &> /dev/null; then
-    DOCKER_COMPOSE_VERSION="v2.24.0"
-    sudo curl -L "https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    sudo chmod +x /usr/local/bin/docker-compose
-    log_info "Docker Compose installed"
-else
-    log_warn "Docker Compose already installed"
-fi
-
-# ==========================================
-# Install k6 (for local load testing)
-# ==========================================
-log_info "Installing k6..."
-if ! command -v k6 &> /dev/null; then
-    sudo gpg -k
-    sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
-    echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
-    sudo apt-get update -y
-    sudo apt-get install -y k6
-    log_info "k6 installed"
-else
-    log_warn "k6 already installed"
 fi
 
 # ==========================================
@@ -129,65 +95,59 @@ if [ ! -d "$PROJECT_DIR" ]; then
 else
     log_warn "Repository already exists, pulling latest..."
     cd "$PROJECT_DIR"
-    git pull origin main
+    git fetch origin main
+    git reset --hard origin/main
 fi
 
 # ==========================================
-# Create .env from template
+# File-based secrets (no Swarm required)
 # ==========================================
-log_info "Setting up environment..."
-if [ ! -f .env ]; then
-    cp .env.example .env
-    log_warn "Created .env from template. YOU MUST EDIT IT with real values:"
-    log_warn "  - OPENAI_API_KEY"
-    log_warn "  - DB_PASSWORD"
-    log_warn "  - CERTBOT_EMAIL"
-else
-    log_info ".env already exists"
+log_info "Writing secrets to secrets/ (mode 700, umask 077)..."
+mkdir -p secrets
+chmod 700 secrets
+umask 077
+
+write_secret() {
+    local name="$1" val="$2"
+    local file="secrets/$name"
+    if [ ! -f "$file" ] || [ "$(cat "$file")" != "$val" ]; then
+        printf '%s' "$val" > "$file"
+    fi
+}
+write_secret DB_PASSWORD "$DB_PASSWORD"
+write_secret openai_api_key "$OPENAI_API_KEY"
+if [ -n "${API_KEY:-}" ]; then
+    write_secret api_key "$API_KEY"
 fi
 
 # ==========================================
-# Create certbot directories
+# Optional GHCR login (only needed for private packages)
 # ==========================================
-log_info "Creating certbot directories..."
+if [ -n "${GHCR_TOKEN:-}" ]; then
+    log_info "Logging in to GHCR..."
+    echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+fi
+
+# ==========================================
+# Certbot directories
+# ==========================================
 mkdir -p certbot/conf certbot/www
 
 # ==========================================
-# Pull Docker images
+# Pull images and start services
 # ==========================================
 log_info "Pulling Docker images..."
-docker compose -f docker-compose.prod.yml pull
+IMAGE_TAG="${IMAGE_TAG:-latest}" docker compose -f docker-compose.prod.yml pull
 
-# ==========================================
-# Start services
-# ==========================================
 log_info "Starting services..."
-docker compose -f docker-compose.prod.yml up -d
-
-# ==========================================
-# Wait for services to be healthy
-# ==========================================
-log_info "Waiting for services to become healthy..."
-sleep 30
-
-# Check health
-for i in {1..10}; do
-    if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
-        log_info "API Gateway is healthy!"
-        break
-    fi
-    log_info "Waiting for API Gateway... (attempt $i/10)"
-    sleep 10
-done
+IMAGE_TAG="${IMAGE_TAG:-latest}" docker compose -f docker-compose.prod.yml up -d
 
 # ==========================================
 # Obtain SSL certificate
 # ==========================================
 log_info "Obtaining Let's Encrypt certificate..."
 if [ ! -d "certbot/conf/live/$DUCKDNS_DOMAIN" ]; then
-    log_warn "Ensure DuckDNS A record points to this instance's public IP!"
-    read -p "Press Enter when DNS is ready, or Ctrl+C to skip..."
-
+    log_warn "Ensure your DNS A record points to this instance's public IP!"
     sudo docker run --rm \
         -v "$(pwd)/certbot/conf:/etc/letsencrypt" \
         -v "$(pwd)/certbot/www:/var/www/certbot" \
@@ -204,18 +164,43 @@ fi
 # Reload nginx with SSL
 # ==========================================
 log_info "Reloading Nginx with SSL..."
-docker compose -f docker-compose.prod.yml restart nginx
+IMAGE_TAG="${IMAGE_TAG:-latest}" docker compose -f docker-compose.prod.yml restart nginx
 
 # ==========================================
-# Setup certbot auto-renewal cron
+# Health gate through nginx -> api_gateway
+# ==========================================
+log_info "Waiting for the stack to become healthy (via nginx)..."
+healthy=0
+for _ in $(seq 1 30); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' "https://$DUCKDNS_DOMAIN/health" || true)
+    if [ "$code" = "200" ]; then
+        healthy=1
+        log_info "Stack is healthy!"
+        break
+    fi
+    log_info "Waiting... (last HTTP status: ${code:-none})"
+    sleep 5
+done
+if [ "$healthy" != "1" ]; then
+    log_error "Health check failed. Inspect logs with: docker compose -f docker-compose.prod.yml logs"
+fi
+
+# ==========================================
+# Free disk space from dangling images
+# ==========================================
+log_info "Pruning dangling images..."
+docker image prune -f || true
+
+# ==========================================
+# Certbot auto-renewal cron
 # ==========================================
 log_info "Setting up certbot auto-renewal..."
-(crontab -l 2>/dev/null; echo "0 3 * * * cd $PROJECT_DIR && docker compose -f docker-compose.prod.yml run --rm certbot renew --quiet && docker compose -f docker-compose.prod.yml restart nginx") | crontab -
+( crontab -l 2>/dev/null | grep -v 'certbot renew' ; \
+  echo "0 3 * * * cd $PROJECT_DIR && docker compose -f docker-compose.prod.yml restart certbot && docker compose -f docker-compose.prod.yml restart nginx" ) | crontab -
 
 # ==========================================
-# Setup log rotation
+# Log rotation
 # ==========================================
-log_info "Setting up log rotation..."
 sudo tee /etc/logrotate.d/legal-rag > /dev/null <<EOF
 $PROJECT_DIR/logs/*.log {
     daily
@@ -224,26 +209,21 @@ $PROJECT_DIR/logs/*.log {
     compress
     delaycompress
     notifempty
-    create 644 ubuntu ubuntu
+    create 644 ec2-user ec2-user
 }
 EOF
 
 # ==========================================
 # Final verification
 # ==========================================
-log_info "Running final health checks..."
-sleep 10
-
 echo ""
 echo "=========================================="
-echo "Deployment Status Check"
+echo "Deployment Status"
 echo "=========================================="
-docker compose -f docker-compose.prod.yml ps
-
+IMAGE_TAG="${IMAGE_TAG:-latest}" docker compose -f docker-compose.prod.yml ps
 echo ""
-echo "Health Endpoints:"
-curl -sf http://localhost:8000/health | jq . 2>/dev/null || echo "API Gateway: DOWN"
-curl -sf http://localhost:8080/health | jq . 2>/dev/null || echo "Router: DOWN"
+curl -sf "https://$DUCKDNS_DOMAIN/health" | jq . 2>/dev/null || echo "API Gateway: DOWN"
+curl -sf "https://$DUCKDNS_DOMAIN/system-health" | jq . 2>/dev/null || echo "System health: DOWN"
 
 echo ""
 echo "=========================================="
@@ -251,10 +231,9 @@ log_info "Bootstrap complete!"
 echo "=========================================="
 echo ""
 echo "Next steps:"
-echo "1. Edit $PROJECT_DIR/.env with your secrets"
-echo "2. Run ingestion: cd $PROJECT_DIR && docker compose -f docker-compose.ingestion.yml up --build --abort-on-container-exit"
-echo "3. Test: curl https://$DUCKDNS_DOMAIN/health"
-echo "4. Monitor: htop (check swap usage)"
+echo "1. Run ingestion: cd $PROJECT_DIR && docker compose -f docker-compose.prod.yml --profile ingest run --rm ingestion"
+echo "2. Test: curl https://$DUCKDNS_DOMAIN/health"
+echo "3. Monitor: htop (check swap usage)"
 echo ""
-echo "To update deployment later:"
-echo "  cd $PROJECT_DIR && git pull && docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d"
+echo "To update later:"
+echo "  cd $PROJECT_DIR && git pull && ./deploy.sh"

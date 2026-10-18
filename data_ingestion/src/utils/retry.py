@@ -61,7 +61,7 @@ class CircuitBreaker:
                 if time.time() - self._last_failure_time >= self.timeout:
                     self._state = CircuitState.HALF_OPEN
                     self._success_count = 0
-                    logger.info(f"Circuit breaker transitioning to HALF_OPEN")
+                    logger.info("Circuit breaker transitioning to HALF_OPEN")
             return self._state
 
     def record_success(self):
@@ -81,7 +81,7 @@ class CircuitBreaker:
             self._last_failure_time = time.time()
             if self._state == CircuitState.HALF_OPEN:
                 self._state = CircuitState.OPEN
-                logger.warning(f"Circuit breaker OPENED after half-open failure")
+                logger.warning("Circuit breaker OPENED after half-open failure")
             elif self._state == CircuitState.CLOSED and self._failure_count >= self.failure_threshold:
                 self._state = CircuitState.OPEN
                 logger.warning(f"Circuit breaker OPENED after {self._failure_count} failures")
@@ -110,7 +110,7 @@ def calculate_backoff(
     return delay
 
 
-def retry_with_backoff(
+def retry_with_backoff_sync(
     max_retries: int = 3,
     base_delay: float = 1.0,
     max_delay: float = 30.0,
@@ -126,6 +126,9 @@ def retry_with_backoff(
     component: str = "unknown",
     operation: str = "unknown",
 ):
+    """
+    Synchronous retry decorator with thread-safe circuit breaker support.
+    """
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(*args, **kwargs) -> Any:
@@ -191,10 +194,27 @@ def retry_with_backoff(
     return decorator
 
 
-def get_circuit_breaker(component: str, operation: str) -> CircuitBreaker:
+retry_with_backoff = retry_with_backoff_sync
+
+
+def get_circuit_breaker(
+    component: str,
+    operation: str,
+    failure_threshold: Optional[int] = None,
+    success_threshold: Optional[int] = None,
+    timeout: Optional[float] = None,
+) -> CircuitBreaker:
+    """Get (or create) a shared circuit breaker for a component/operation pair."""
     key = f"{component}.{operation}"
     if not hasattr(get_circuit_breaker, '_breakers'):
         get_circuit_breaker._breakers = {}
     if key not in get_circuit_breaker._breakers:
-        get_circuit_breaker._breakers[key] = CircuitBreaker()
+        overrides = {}
+        if failure_threshold is not None:
+            overrides["failure_threshold"] = failure_threshold
+        if success_threshold is not None:
+            overrides["success_threshold"] = success_threshold
+        if timeout is not None:
+            overrides["timeout"] = timeout
+        get_circuit_breaker._breakers[key] = CircuitBreaker(**overrides)
     return get_circuit_breaker._breakers[key]

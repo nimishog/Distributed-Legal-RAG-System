@@ -158,7 +158,7 @@ export default function () {
       timeout: '30s',  // Generous timeout for overloaded system
     };
 
-    const res = http.post(`${BASE_URL}/ask`, payload, params);
+    const res = http.post(`${BASE_URL}/api/ask`, payload, params);
 
     const duration = new Date() - startTime;
     requestDuration.add(duration);

@@ -1,6 +1,7 @@
 import axios from 'axios';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_KEY = import.meta.env.VITE_API_KEY || '';
 
 export const apiClient = axios.create({
   baseURL: API_URL,
@@ -8,6 +9,7 @@ export const apiClient = axios.create({
   headers: {
     'Content-Type': 'application/json',
     Accept: 'application/json',
+    ...(API_KEY && { 'X-API-Key': API_KEY }),
   },
 });
 
@@ -15,6 +17,9 @@ apiClient.interceptors.request.use(
   (config) => {
     const requestId = crypto.randomUUID?.() || Math.random().toString(36).substring(7);
     config.headers['X-Request-ID'] = requestId;
+    if (API_KEY) {
+      config.headers['X-API-Key'] = API_KEY;
+    }
     return config;
   },
   (error) => Promise.reject(error)

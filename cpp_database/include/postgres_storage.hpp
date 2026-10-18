@@ -18,6 +18,8 @@ public:
                 const std::vector<float>& embedding,
                 const nlohmann::json& metadata) override;
 
+    void batch_insert(const std::vector<InsertRequest>& requests) override;
+
     std::vector<SearchResult> search(const std::vector<float>& embedding,
                                      size_t top_k,
                                      const nlohmann::json& filter = {}) override;
@@ -34,6 +36,7 @@ private:
 
     std::unique_ptr<pqxx::connection> acquire();
     void release(std::unique_ptr<pqxx::connection>&& conn);
+    bool validate_connection(pqxx::connection& conn);
 
     std::string conn_string_;
     size_t pool_size_;

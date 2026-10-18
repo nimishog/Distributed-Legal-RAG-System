@@ -1,134 +1,75 @@
-# Vercel Deployment Guide for Legal RAG Frontend
+# Vercel Deployment Guide (Frontend)
+
+The React SPA is hosted on Vercel and talks directly to the production API
+gateway over HTTPS.
 
 ## Prerequisites
 - GitHub repository connected to Vercel
-- Production API Gateway running at `https://nimish-legal-rag.duckdns.org` (or your domain)
+- Production API gateway running at `https://nimish-legal-rag.duckdns.org`
 
 ## Quick Deploy
 
-1. **Connect Repository to Vercel**
+1. **Connect the repository**
    - Go to https://vercel.com/new
-   - Import your GitHub repository
-   - Select the `frontend` directory as the root directory
+   - Import the GitHub repository
+   - Set the root directory to `frontend`
 
-2. **Configure Build Settings**
+2. **Build settings** (Vercel auto-detects Vite; these are the defaults)
    - Framework Preset: **Vite**
    - Build Command: `npm run build`
    - Output Directory: `dist`
    - Install Command: `npm install`
 
-3. **Set Environment Variables** (in Vercel Project Settings → Environment Variables)
-   | Variable | Value | Environment |
-   |----------|-------|-------------|
-   | `VITE_API_URL` | `https://nimish-legal-rag.duckdns.org` | Production, Preview, Development |
+3. **Environment variables** (Project Settings → Environment Variables)
 
-4. **Deploy**
-   - Click "Deploy"
-   - Vercel will auto-detect Vite and build the project
+   | Variable | Value | Notes |
+   |----------|-------|-------|
+   | `VITE_API_URL` | `https://nimish-legal-rag.duckdns.org` | Production, Preview, Development |
+   | `VITE_API_KEY` | _(your API key)_ | **Only if** `API_KEY` is set on the gateway |
+
+   `VITE_*` variables are baked into the bundle at build time, so redeploy
+   after changing them.
+
+4. **Deploy** — Vercel auto-detects Vite and builds the project.
 
 ## Post-Deploy Verification
 
-1. Open the deployed URL (e.g., `https://your-project.vercel.app`)
-2. Test the chat interface
-3. Check browser console for API requests going to the correct backend
+1. Open the deployment URL.
+2. Ask a question and confirm the answer renders with citations.
+3. Check the browser Network tab: requests go to `https://nimish-legal-rag.duckdns.org`.
 
-## Custom Domain (Optional)
+## CORS
 
-1. In Vercel Project Settings → Domains
-2. Add your custom domain (e.g., `legal-rag.yourdomain.com`)
-3. Configure DNS as instructed by Vercel
+The gateway must allow the Vercel origin. On the EC2 host, set in `.env`:
 
-## Environment-Specific Configuration
+```bash
+# Exact production origin
+CORS_ORIGINS=["https://distributed-legal-rag.vercel.app"]
 
-### Development
-- Uses proxy in `vite.config.js` to `http://localhost:8000`
-- No environment variables needed locally
+# Optional: also allow Vercel preview deployments
+CORS_ORIGIN_REGEX=^https://.*\.vercel\.app$
+```
 
-### Preview (Vercel Preview Deployments)
-- Automatically uses the `VITE_API_URL` from environment variables
-- Set to staging API if available, otherwise production
+The gateway reads `CORS_ORIGINS` from `.env` at container start, so you can
+change the Vercel domain without rebuilding the image:
 
-### Production
-- Uses production API URL
-- Assets served with long-term caching via `vercel.json` headers
+```bash
+docker compose -f docker-compose.prod.yml up -d --no-deps api_gateway
+```
 
 ## Troubleshooting
 
-### CORS Errors
-If you see CORS errors, ensure the API Gateway has CORS configured:
-```python
-# In api_gateway/src/main.py
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Or specific Vercel domain
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-```
+### CORS errors
+- Confirm `CORS_ORIGINS` in `.env` matches the Vercel origin.
+- Restart the gateway (`docker compose -f docker-compose.prod.yml up -d --no-deps api_gateway`).
 
-### API Connection Issues
-- Verify `VITE_API_URL` is set correctly in Vercel
-- Check browser Network tab for failed requests
-- Ensure API Gateway health endpoint is accessible
+### API connection errors
+- Verify `VITE_API_URL` points at the correct backend.
+- Check that the gateway `/health` endpoint is reachable.
 
-### Build Failures
-- Check build logs in Vercel dashboard
-- Ensure all dependencies are in `package.json`
-- Verify Node.js version compatibility (Vercel uses 18.x by default)
+## Git Integration
 
-## Vercel Configuration Reference
-
-The `vercel.json` in the frontend directory handles:
-- SPA routing (rewrites all routes to `index.html`)
-- Asset caching (1 year for `/assets/*`)
-- Framework detection (Vite)
-
-```json
-{
-  "buildCommand": "npm run build",
-  "outputDirectory": "dist",
-  "framework": "vite",
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/index.html"
-    }
-  ],
-  "headers": [
-    {
-      "source": "/assets/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=31536000, immutable"
-        }
-      ]
-    }
-  ]
-}
-```
-
-## CI/CD Integration
-
-The GitHub Actions workflow can trigger Vercel deployments:
-```yaml
-# .github/workflows/deploy-frontend.yml
-name: Deploy Frontend to Vercel
-on:
-  push:
-    branches: [main]
-    paths:
-      - 'frontend/**'
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: amondnet/vercel-action@v25
-        with:
-          vercel-token: ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          vercel-args: '--prod'
-```
+Vercel's built-in Git integration deploys on every push to `main` and creates
+preview deployments for pull requests. No extra workflow is required. If you
+prefer an explicit workflow, see `.github/workflows/deploy.yml` for the
+backend build/deploy pattern.

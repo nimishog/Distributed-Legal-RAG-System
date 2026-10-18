@@ -1,6 +1,7 @@
 import time
 import random
 import logging
+import asyncio
 from typing import Callable, Any, Tuple, Type, Optional
 from functools import wraps
 from dataclasses import dataclass, field
@@ -45,6 +46,8 @@ class CircuitState(Enum):
 
 @dataclass
 class CircuitBreaker:
+    """Thread-safe circuit breaker usable from sync and async code paths."""
+
     failure_threshold: int = 5
     success_threshold: int = 2
     timeout: float = 30.0
@@ -54,14 +57,13 @@ class CircuitBreaker:
     _last_failure_time: float = field(default=0, init=False)
     _lock: Lock = field(default_factory=Lock, init=False)
 
-    @property
-    def state(self) -> CircuitState:
+    def get_state(self) -> CircuitState:
         with self._lock:
             if self._state == CircuitState.OPEN:
                 if time.time() - self._last_failure_time >= self.timeout:
                     self._state = CircuitState.HALF_OPEN
                     self._success_count = 0
-                    logger.info(f"Circuit breaker transitioning to HALF_OPEN")
+                    logger.info("Circuit breaker transitioning to HALF_OPEN")
             return self._state
 
     def record_success(self):
@@ -81,13 +83,13 @@ class CircuitBreaker:
             self._last_failure_time = time.time()
             if self._state == CircuitState.HALF_OPEN:
                 self._state = CircuitState.OPEN
-                logger.warning(f"Circuit breaker OPENED after half-open failure")
+                logger.warning("Circuit breaker OPENED after half-open failure")
             elif self._state == CircuitState.CLOSED and self._failure_count >= self.failure_threshold:
                 self._state = CircuitState.OPEN
                 logger.warning(f"Circuit breaker OPENED after {self._failure_count} failures")
 
     def is_available(self) -> bool:
-        return self.state != CircuitState.OPEN
+        return self.get_state() != CircuitState.OPEN
 
 
 class CircuitBreakerOpenError(Exception):
@@ -110,6 +112,14 @@ def calculate_backoff(
     return delay
 
 
+def _observe_state(component: str, operation: str, breaker: Optional[CircuitBreaker]):
+    if breaker is None:
+        return
+    CIRCUIT_BREAKER_STATE.labels(component=component, operation=operation).set(
+        breaker.get_state().value
+    )
+
+
 def retry_with_backoff(
     max_retries: int = 3,
     base_delay: float = 1.0,
@@ -126,6 +136,7 @@ def retry_with_backoff(
     component: str = "unknown",
     operation: str = "unknown",
 ):
+    """Synchronous retry decorator with a thread-safe circuit breaker."""
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(*args, **kwargs) -> Any:
@@ -133,18 +144,14 @@ def retry_with_backoff(
 
             for attempt in range(max_retries + 1):
                 if circuit_breaker and not circuit_breaker.is_available():
-                    CIRCUIT_BREAKER_STATE.labels(
-                        component=component, operation=operation
-                    ).set(CircuitState.OPEN.value)
+                    _observe_state(component, operation, circuit_breaker)
                     raise CircuitBreakerOpenError(component, operation)
 
                 try:
                     result = func(*args, **kwargs)
                     if circuit_breaker:
                         circuit_breaker.record_success()
-                        CIRCUIT_BREAKER_STATE.labels(
-                            component=component, operation=operation
-                        ).set(CircuitState.CLOSED.value)
+                        _observe_state(component, operation, circuit_breaker)
                     if attempt > 0:
                         RETRY_ATTEMPTS.labels(
                             component=component, operation=operation, result="success"
@@ -158,9 +165,7 @@ def retry_with_backoff(
                         CIRCUIT_BREAKER_FAILURES.labels(
                             component=component, operation=operation
                         ).inc()
-                        CIRCUIT_BREAKER_STATE.labels(
-                            component=component, operation=operation
-                        ).set(circuit_breaker.state.value)
+                        _observe_state(component, operation, circuit_breaker)
 
                     if attempt < max_retries:
                         delay = calculate_backoff(
@@ -191,7 +196,7 @@ def retry_with_backoff(
     return decorator
 
 
-async def async_retry_with_backoff(
+def async_retry_with_backoff(
     max_retries: int = 3,
     base_delay: float = 1.0,
     max_delay: float = 30.0,
@@ -214,18 +219,14 @@ async def async_retry_with_backoff(
 
             for attempt in range(max_retries + 1):
                 if circuit_breaker and not circuit_breaker.is_available():
-                    CIRCUIT_BREAKER_STATE.labels(
-                        component=component, operation=operation
-                    ).set(CircuitState.OPEN.value)
+                    _observe_state(component, operation, circuit_breaker)
                     raise CircuitBreakerOpenError(component, operation)
 
                 try:
                     result = await func(*args, **kwargs)
                     if circuit_breaker:
                         circuit_breaker.record_success()
-                        CIRCUIT_BREAKER_STATE.labels(
-                            component=component, operation=operation
-                        ).set(CircuitState.CLOSED.value)
+                        _observe_state(component, operation, circuit_breaker)
                     if attempt > 0:
                         RETRY_ATTEMPTS.labels(
                             component=component, operation=operation, result="success"
@@ -239,9 +240,7 @@ async def async_retry_with_backoff(
                         CIRCUIT_BREAKER_FAILURES.labels(
                             component=component, operation=operation
                         ).inc()
-                        CIRCUIT_BREAKER_STATE.labels(
-                            component=component, operation=operation
-                        ).set(circuit_breaker.state.value)
+                        _observe_state(component, operation, circuit_breaker)
 
                     if attempt < max_retries:
                         delay = calculate_backoff(
@@ -265,14 +264,10 @@ async def async_retry_with_backoff(
                         RETRY_ATTEMPTS.labels(
                             component=component, operation=operation, result="failed"
                         ).inc()
-
-            raise last_exception
+                        raise last_exception
 
         return wrapper
     return decorator
-
-
-import asyncio
 
 
 def get_circuit_breaker(component: str, operation: str) -> CircuitBreaker:

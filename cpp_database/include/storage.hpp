@@ -16,6 +16,13 @@ struct SearchResult {
     json metadata;
 };
 
+struct InsertRequest {
+    std::string id;
+    std::string text;
+    std::vector<float> embedding;
+    json metadata;
+};
+
 struct HealthStatus {
     bool healthy;
     std::string message;
@@ -31,6 +38,8 @@ public:
                         const std::string& text,
                         const std::vector<float>& embedding,
                         const json& metadata) = 0;
+
+    virtual void batch_insert(const std::vector<InsertRequest>& requests) = 0;
 
     virtual std::vector<SearchResult> search(const std::vector<float>& embedding,
                                              size_t top_k,
