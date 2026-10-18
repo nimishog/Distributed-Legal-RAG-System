@@ -44,8 +44,13 @@ class LLMClient:
     async def initialize(self):
         if not self.settings.openai_api_key:
             logger.warning("OPENAI_API_KEY not set, LLM client will not work")
-            return
-        self.client = AsyncOpenAI(api_key=self.settings.openai_api_key)
+        else:
+            self.client = AsyncOpenAI(api_key=self.settings.openai_api_key)
+
+        # Eagerly load the embedding model so /health reports ready and the
+        # first query does not pay the model-load latency. The Docker image
+        # preloads the weights into the HF cache, so this is a cache hit.
+        self._load_embedding_model()
         logger.info("LLM client initialized")
 
     def _load_embedding_model(self):

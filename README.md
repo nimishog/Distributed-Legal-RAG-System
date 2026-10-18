@@ -189,11 +189,21 @@ printf '%s' "$API_KEY"        > secrets/api_key   # optional
    deployed on EC2.
 3. Manual workflows: `ingest.yml` (runs ingestion on EC2), `load-test.yml`.
 
+### Database schema migration (768-d → 384-d)
+The embedding dimension changed from 768 (`all-mpnet-base-v2`) to 384
+(`all-MiniLM-L6-v2`). `init_db.sql` uses `CREATE TABLE IF NOT EXISTS`, so an
+existing `pgdata` volume keeps the old `VECTOR(768)` column and ingestion will
+fail on a dimension mismatch. Reset the volume before the first deploy:
+```bash
+docker compose -f docker-compose.prod.yml down -v
+docker compose -f docker-compose.prod.yml up -d
+```
+
 ### SSL (Let's Encrypt)
 ```bash
-sudo docker run --rm \
+sudo docker run --rm --network host \
   -v "$(pwd)/certbot/conf:/etc/letsencrypt" \
-  -v "$(pwd)/certbot/www:/var/www/certbot" \
+  certbot/certbot certonly --standalone --preferred-challenges http \
   certbot/certbot certonly --webroot -w /var/www/certbot \
   -d nimish-legal-rag.duckdns.org
 ```

@@ -34,20 +34,21 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
           MAX_INGESTION_CHUNKS: ${{ github.event.inputs.max_chunks }}
         run: |
+          GHCR_REPO="$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
           echo "$EC2_SSH_KEY" > /tmp/ec2_key
           chmod 600 /tmp/ec2_key
           ssh -i /tmp/ec2_key -o StrictHostKeyChecking=accept-new ec2-user@$EC2_HOST \
-            "bash -s" -- "$GHCR_TOKEN" "$MAX_INGESTION_CHUNKS" "${{ github.sha }}" <<'REMOTE'
+            "bash -s" -- "$GHCR_TOKEN" "$MAX_INGESTION_CHUNKS" "${{ github.sha }}" "$GHCR_REPO" <<'REMOTE'
             set -euo pipefail
-            GHCR_TOKEN="$1"; MAX_INGESTION_CHUNKS="$2"; IMAGE_TAG="$3"
+            GHCR_TOKEN="$1"; MAX_INGESTION_CHUNKS="$2"; IMAGE_TAG="$3"; GHCR_REPO="$4"
             cd /opt/legal-rag
-            export IMAGE_TAG
+            export IMAGE_TAG GHCR_REPO
 
             if [ -n "$GHCR_TOKEN" ]; then
-              echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+              echo "$GHCR_TOKEN" | docker login ghcr.io -u "${GHCR_REPO%%/*}" --password-stdin
             fi
 
-            docker compose -f docker-compose.prod.yml pull ingestion cpp_router cpp_database
+            docker compose -f docker-compose.prod.yml pull ingestion cpp_router cpp_database_0 cpp_database_1 cpp_database_2
             MAX_INGESTION_CHUNKS="$MAX_INGESTION_CHUNKS" \
               docker compose -f docker-compose.prod.yml --profile ingest run --rm ingestion
           REMOTE

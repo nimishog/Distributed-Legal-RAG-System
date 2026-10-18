@@ -12,6 +12,18 @@ from src.config import Settings
 from src.schemas.models import Citation
 
 
+@pytest.fixture(autouse=True)
+def _mock_embedding_model(monkeypatch):
+    """Keep the app lifespan from downloading the embedding model.
+
+    LLMClient.initialize() now eagerly loads the model (so /health reports
+    ready). In tests we substitute a dummy so startup is fast and offline.
+    """
+    monkeypatch.setattr(
+        LLMClient, "_load_embedding_model", lambda self: MagicMock()
+    )
+
+
 @pytest.fixture
 def mock_settings():
     return Settings(

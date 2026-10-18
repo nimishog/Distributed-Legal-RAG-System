@@ -40,7 +40,7 @@ services:
         max-file: "3"
 
   api_gateway:
-    image: ghcr.io/${GITHUB_REPOSITORY:-local}/api_gateway:${IMAGE_TAG:-latest}
+    image: ghcr.io/${GHCR_REPO:-nimishog/distributed-legal-rag-system}/api_gateway:${IMAGE_TAG:-latest}
     container_name: legal-rag-api
     environment:
       ROUTER_HOST: cpp_router
@@ -66,9 +66,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 400M
+          memory: 512M
         reservations:
-          memory: 150M
+          memory: 200M
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=5).status==200 else 1)"]
       interval: 30s
@@ -82,7 +82,7 @@ services:
         max-file: "3"
 
   cpp_router:
-    image: ghcr.io/${GITHUB_REPOSITORY:-local}/cpp_router:${IMAGE_TAG:-latest}
+    image: ghcr.io/${GHCR_REPO:-nimishog/distributed-legal-rag-system}/cpp_router:${IMAGE_TAG:-latest}
     container_name: legal-rag-router
     environment:
       DB_NODES: cpp_database_0:8081,cpp_database_1:8081,cpp_database_2:8081
@@ -150,7 +150,7 @@ services:
         max-file: "3"
 
   cpp_database_0:
-    image: ghcr.io/${GITHUB_REPOSITORY:-local}/cpp_database:${IMAGE_TAG:-latest}
+    image: ghcr.io/${GHCR_REPO:-nimishog/distributed-legal-rag-system}/cpp_database:${IMAGE_TAG:-latest}
     container_name: legal-rag-db-0
     environment:
       DB_HOST: postgres
@@ -182,7 +182,7 @@ services:
         max-file: "3"
 
   cpp_database_1:
-    image: ghcr.io/${GITHUB_REPOSITORY:-local}/cpp_database:${IMAGE_TAG:-latest}
+    image: ghcr.io/${GHCR_REPO:-nimishog/distributed-legal-rag-system}/cpp_database:${IMAGE_TAG:-latest}
     container_name: legal-rag-db-1
     environment:
       DB_HOST: postgres
@@ -214,7 +214,7 @@ services:
         max-file: "3"
 
   cpp_database_2:
-    image: ghcr.io/${GITHUB_REPOSITORY:-local}/cpp_database:${IMAGE_TAG:-latest}
+    image: ghcr.io/${GHCR_REPO:-nimishog/distributed-legal-rag-system}/cpp_database:${IMAGE_TAG:-latest}
     container_name: legal-rag-db-2
     environment:
       DB_HOST: postgres
@@ -250,7 +250,7 @@ services:
   # The 450 MB limit + modest batch size keep it on swap instead of triggering
   # the kernel OOM killer on the 1 GB t3.micro.
   ingestion:
-    image: ghcr.io/${GITHUB_REPOSITORY:-local}/data_ingestion:${IMAGE_TAG:-latest}
+    image: ghcr.io/${GHCR_REPO:-nimishog/distributed-legal-rag-system}/data_ingestion:${IMAGE_TAG:-latest}
     profiles: ["ingest"]
     container_name: legal-rag-ingestion
     environment:

@@ -88,8 +88,15 @@ fi
 # ==========================================
 # Clone repository
 # ==========================================
-log_info "Cloning repository..."
+# /opt is root-owned on most images; ensure the project dir is writable by the
+# current (non-root) user before cloning.
 if [ ! -d "$PROJECT_DIR" ]; then
+    sudo mkdir -p "$PROJECT_DIR"
+    sudo chown "$(id -u):$(id -g)" "$PROJECT_DIR"
+fi
+
+log_info "Cloning repository..."
+if [ ! -d "$PROJECT_DIR/.git" ]; then
     git clone "$REPO_URL" "$PROJECT_DIR"
     cd "$PROJECT_DIR"
 else
@@ -98,6 +105,10 @@ else
     git fetch origin main
     git reset --hard origin/main
 fi
+
+# Export a lowercase GHCR repo reference for docker-compose.prod.yml.
+GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-nimishog/Distributed-Legal-Rag-System}"
+export GHCR_REPO="${GITHUB_REPOSITORY,,}"
 
 # ==========================================
 # File-based secrets (no Swarm required)
@@ -116,9 +127,9 @@ write_secret() {
 }
 write_secret DB_PASSWORD "$DB_PASSWORD"
 write_secret openai_api_key "$OPENAI_API_KEY"
-if [ -n "${API_KEY:-}" ]; then
-    write_secret api_key "$API_KEY"
-fi
+# Always write api_key, even when empty: docker-compose.prod.yml mounts the
+# file unconditionally, and an empty value means auth is disabled.
+write_secret api_key "${API_KEY:-}"
 
 # ==========================================
 # Optional GHCR login (only needed for private packages)
@@ -134,25 +145,25 @@ fi
 mkdir -p certbot/conf certbot/www
 
 # ==========================================
-# Pull images and start services
+# Pull images
 # ==========================================
 log_info "Pulling Docker images..."
 IMAGE_TAG="${IMAGE_TAG:-latest}" docker compose -f docker-compose.prod.yml pull
 
-log_info "Starting services..."
-IMAGE_TAG="${IMAGE_TAG:-latest}" docker compose -f docker-compose.prod.yml up -d
-
 # ==========================================
 # Obtain SSL certificate
 # ==========================================
+# This must happen BEFORE nginx starts: nginx refuses to boot when its
+# ssl_certificate files are missing, and certbot needs port 80 free to answer
+# the HTTP-01 challenge. --standalone binds port 80 itself, so we do not need
+# a running web server for the challenge.
 log_info "Obtaining Let's Encrypt certificate..."
 if [ ! -d "certbot/conf/live/$DUCKDNS_DOMAIN" ]; then
     log_warn "Ensure your DNS A record points to this instance's public IP!"
-    sudo docker run --rm \
+    sudo docker run --rm --network host \
         -v "$(pwd)/certbot/conf:/etc/letsencrypt" \
-        -v "$(pwd)/certbot/www:/var/www/certbot" \
-        certbot/certbot certonly \
-        --webroot -w /var/www/certbot \
+        certbot/certbot certonly --standalone \
+        --preferred-challenges http \
         --email "$CERTBOT_EMAIL" \
         --agree-tos --no-eff-email \
         -d "$DUCKDNS_DOMAIN" || log_error "Certbot failed. Check DNS and try manually."
@@ -161,10 +172,10 @@ else
 fi
 
 # ==========================================
-# Reload nginx with SSL
+# Start services (nginx now finds its certificates)
 # ==========================================
-log_info "Reloading Nginx with SSL..."
-IMAGE_TAG="${IMAGE_TAG:-latest}" docker compose -f docker-compose.prod.yml restart nginx
+log_info "Starting services..."
+IMAGE_TAG="${IMAGE_TAG:-latest}" docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
 # ==========================================
 # Health gate through nginx -> api_gateway

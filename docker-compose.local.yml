@@ -221,6 +221,7 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+        VITE_API_KEY: ${VITE_API_KEY:-}
     container_name: legal-rag-frontend
     environment:
       VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}

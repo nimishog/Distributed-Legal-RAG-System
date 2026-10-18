@@ -18,7 +18,9 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         self.settings = get_settings()
 
     async def dispatch(self, request: Request, call_next):
-        if request.url.path in self.excluded_paths:
+        # Let CORS preflight through untouched; CORSMiddleware handles OPTIONS
+        # and must not be blocked by the API-key check.
+        if request.method == "OPTIONS" or request.url.path in self.excluded_paths:
             return await call_next(request)
 
         if self.settings.api_key:

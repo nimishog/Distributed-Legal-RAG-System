@@ -11,8 +11,8 @@ build/
 *.dylib
 CMakeCache.txt
 CMakeFiles/
-Makefile
 cmake_install.cmake
+# NOTE: the root Makefile is a tracked project file and must NOT be ignored.
 
 # ==========================================
 # Python (api_gateway & data_ingestion)
@@ -44,6 +44,11 @@ yarn-error.log*
 # Ignores local datasets and persistent disk storage[cite: 1]
 cpp_database/data_volumes/
 data_ingestion/data/
+
+# ==========================================
+# Secrets (file-based, no Swarm)
+# ==========================================
+secrets/
 
 # ==========================================
 # OS & IDE Generated Files

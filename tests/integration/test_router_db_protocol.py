@@ -22,6 +22,9 @@ import pytest
 # Test configuration
 ROUTER_HOST = os.getenv("ROUTER_HOST", "localhost")
 ROUTER_PORT = int(os.getenv("ROUTER_PORT", "8080"))
+# The router exposes HTTP health endpoints on a SEPARATE port from the binary
+# protocol port (8084 locally, 8081 in prod).
+ROUTER_HTTP_PORT = int(os.getenv("ROUTER_HTTP_PORT", "8084"))
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORTS = [int(p) for p in os.getenv("DB_PORTS", "8081,8082,8083").split(",")]
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "384"))
@@ -106,9 +109,26 @@ class TestRouterDBProtocol:
         for client in clients:
             client.close()
 
-    def test_router_health_check(self, router_client):
-        request = b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n"
-        router_client.sock.sendall(request)
+    def test_router_health_check(self):
+        # HTTP health endpoints live on the router's HTTP port, not the binary
+        # protocol port.
+        client = ProtocolClient(ROUTER_HOST, ROUTER_HTTP_PORT)
+        client.connect()
+        try:
+            request = b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n"
+            client.sock.sendall(request)
+
+            response = b""
+            while b"\r\n\r\n" not in response:
+                chunk = client.sock.recv(1024)
+                if not chunk:
+                    break
+                response += chunk
+
+            assert b"200 OK" in response
+            assert b"healthy" in response
+        finally:
+            client.close()
 
         response = b""
         while b"\r\n\r\n" not in response:
@@ -295,7 +315,10 @@ class TestRouterDBProtocol:
         assert len(response["results"][0]["text"]) == 1024 * 1024
 
     def test_invalid_json_handling(self, router_client):
-        router_client.sock.sendall(b"not valid json")
+        # The protocol frames every message with a 4-byte big-endian length
+        # prefix; the router reads the length first.
+        payload = b"not valid json"
+        router_client.sock.sendall(struct.pack(">I", len(payload)) + payload)
         response = router_client.read_frame()
         assert response.get("status") == "error"
         assert response.get("code") == "INVALID_ARG"

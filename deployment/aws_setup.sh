@@ -112,6 +112,11 @@ fi
 
 # Certbot
 yum install -y certbot
+
+# Clone the repository so a fresh deploy.sh run finds /opt/legal-rag populated.
+mkdir -p /opt/legal-rag
+git clone https://github.com/nimishog/Distributed-Legal-RAG-System.git /opt/legal-rag || true
+chown -R ec2-user:ec2-user /opt/legal-rag
 EOF
 )
 
