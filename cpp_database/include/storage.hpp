@@ -43,7 +43,7 @@ public:
 
     virtual std::vector<SearchResult> search(const std::vector<float>& embedding,
                                              size_t top_k,
-                                             const json& filter = {}) = 0;
+                                             const json& filter = json::object()) = 0;
 
     virtual void remove(const std::vector<std::string>& ids) = 0;
 

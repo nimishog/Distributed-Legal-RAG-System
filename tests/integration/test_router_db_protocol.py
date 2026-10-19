@@ -274,7 +274,7 @@ class TestRouterDBProtocol:
             assert response.get("status") == "ok"
             assert len(response["results"]) == 1
 
-    def test_concurrent_requests(self, router_client):
+    def test_sequential_requests(self, router_client):
         for i in range(20):
             response = router_client.send_request({
                 "op": "insert",

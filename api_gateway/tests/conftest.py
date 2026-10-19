@@ -25,25 +25,6 @@ def _mock_embedding_model(monkeypatch):
 
 
 @pytest.fixture
-def mock_settings():
-    return Settings(
-        router_host="localhost",
-        router_port=8080,
-        router_pool_size=2,
-        openai_api_key="test-key",
-        openai_model="gpt-4o-mini",
-        openai_max_tokens=500,
-        openai_temperature=0.1,
-        api_host="0.0.0.0",
-        api_port=8000,
-        log_level="DEBUG",
-        embedding_model="sentence-transformers/all-MiniLM-L6-v2",
-        embedding_device="cpu",
-        rate_limit_concurrent=2,
-    )
-
-
-@pytest.fixture
 def mock_router_client():
     client = AsyncMock(spec=RouterClient)
     client.health_check = AsyncMock(return_value=True)

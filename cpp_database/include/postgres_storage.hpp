@@ -22,7 +22,7 @@ public:
 
     std::vector<SearchResult> search(const std::vector<float>& embedding,
                                      size_t top_k,
-                                     const nlohmann::json& filter = {}) override;
+                                     const nlohmann::json& filter = nlohmann::json::object()) override;
 
     void remove(const std::vector<std::string>& ids) override;
 

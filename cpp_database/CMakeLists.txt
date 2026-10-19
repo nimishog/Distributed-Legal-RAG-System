@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.16)
 project(VectorDatabaseNode VERSION 1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -31,6 +31,10 @@ if(CMAKE_CXX_STANDARD VERSION_GREATER_EQUAL 17)
 endif()
 
 option(BUILD_TESTS "Build unit tests" ON)
+
+# Allow FetchContent dependencies (nlohmann/json, googletest) that declare an
+# older cmake_minimum_required to configure under CMake >= 4.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
 include(FetchContent)
 
@@ -87,7 +91,7 @@ if(BUILD_TESTS)
     )
     target_include_directories(run_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_link_libraries(run_tests PRIVATE
-        GTest::gtest_main
+        gtest_main
         Threads::Threads
         ${LIBPQXX_LIBRARIES}
         ${LIBPQ_LIBRARIES}

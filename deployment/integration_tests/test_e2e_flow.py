@@ -10,6 +10,18 @@ import requests
 import json
 from typing import Dict, Any
 
+import pytest
+
+# These are end-to-end tests that require a live API gateway AND a valid
+# OpenAI API key. They are meant to be run manually:
+#   python deployment/integration_tests/test_e2e_flow.py
+# or in a dedicated live environment with E2E_LIVE=1. Skip them during normal
+# pytest collection so `pytest` does not fail without a live backend.
+pytestmark = pytest.mark.skipif(
+    os.getenv("E2E_LIVE") != "1",
+    reason="e2e tests require a live API (set E2E_LIVE=1)",
+)
+
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 TIMEOUT = 60
 
@@ -37,8 +49,8 @@ def test_system_health() -> Dict[str, Any]:
     print(f"  ✓ System Health OK: CPU={data['cpu_percent']:.1f}%, Mem={data['memory_percent']:.1f}%")
     return data
 
-def test_ask(question: str, top_k: int = 5) -> Dict[str, Any]:
-    """Test /api/ask endpoint"""
+def ask_question(question: str, top_k: int = 5) -> Dict[str, Any]:
+    """Call /api/ask and validate the response."""
     print(f"Testing /api/ask: '{question[:50]}...'")
     payload = {
         "question": question,
@@ -128,8 +140,8 @@ def main():
         ]
         
         for q in questions:
-            test_ask(q)
-            time.sleep(1)  # Brief pause between requests
+            ask_question(q)
+        time.sleep(1)  # Brief pause between requests
         
         test_insufficient_context()
         test_rate_limit()

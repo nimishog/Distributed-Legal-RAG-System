@@ -49,12 +49,35 @@ TEST(HashRingTest, MarkUnhealthy) {
     ring.add_node("node-2", "localhost", 8082);
     ring.add_node("node-3", "localhost", 8083);
 
+    // A node is marked unhealthy only after 3 consecutive failed health
+    // checks, so a single failure must not remove it yet.
     ring.mark_healthy("node-2", false);
     auto nodes = ring.get_nodes("test-key", 3);
+    EXPECT_EQ(nodes.size(), 3);
+
+    ring.mark_healthy("node-2", false);
+    ring.mark_healthy("node-2", false);
+    nodes = ring.get_nodes("test-key", 3);
     EXPECT_EQ(nodes.size(), 2);
     for (const auto& n : nodes) {
         EXPECT_NE(n.id, "node-2");
     }
+}
+
+TEST(HashRingTest, RecoverAfterFailures) {
+    HashRing ring(50);
+    ring.add_node("node-1", "localhost", 8081);
+    ring.add_node("node-2", "localhost", 8082);
+    ring.add_node("node-3", "localhost", 8083);
+
+    ring.mark_healthy("node-2", false);
+    ring.mark_healthy("node-2", false);
+    ring.mark_healthy("node-2", false);
+    EXPECT_EQ(ring.get_nodes("test-key", 3).size(), 2);
+
+    // A single successful health check clears the failure count.
+    ring.mark_healthy("node-2", true);
+    EXPECT_EQ(ring.get_nodes("test-key", 3).size(), 3);
 }
 
 TEST(HashRingTest, DistributionUniformity) {

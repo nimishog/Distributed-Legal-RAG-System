@@ -4,9 +4,22 @@
 #include <nlohmann/json.hpp>
 #include <vector>
 #include <string>
+#include <cstdio>
 #include <cstdlib>
 
 using json = nlohmann::json;
+
+// legal_chunks.id is a PostgreSQL UUID, so tests must use valid UUIDs.
+static std::string uid(int n) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "00000000-0000-0000-0000-%012llu",
+                 static_cast<unsigned long long>(n));
+    return buf;
+}
+
+static const std::string ID1 = uid(1);
+static const std::string ID2 = uid(2);
+static const std::string ID3 = uid(3);
 
 class PostgresStorageTest : public ::testing::Test {
 protected:
@@ -37,12 +50,20 @@ protected:
         }
     }
 
+    // Remove every id any test may have inserted so tests are isolated even
+    // when a previous run aborted mid-test.
+    static void clean() {
+        std::vector<std::string> ids;
+        for (int i = 1; i <= 200; ++i) ids.push_back(uid(i));
+        storage->remove(ids);
+    }
+
     void SetUp() override {
-        storage->remove({"test-id-1", "test-id-2", "test-id-3"});
+        if (storage) clean();
     }
 
     void TearDown() override {
-        storage->remove({"test-id-1", "test-id-2", "test-id-3"});
+        if (storage) clean();
     }
 };
 
@@ -52,46 +73,47 @@ TEST_F(PostgresStorageTest, InsertAndSearch) {
     std::vector<float> embedding(384, 0.0f);
     embedding[0] = 1.0f;
 
-    storage->insert("test-id-1", "Test legal text about contracts", embedding, {{"source", "test"}});
+    storage->insert(ID1, "Test legal text about contracts", embedding, {{"source", "test"}});
 
     auto results = storage->search(embedding, 5);
-    ASSERT_EQ(results.size(), 1);
-    EXPECT_EQ(results[0].id, "test-id-1");
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].id, ID1);
     EXPECT_EQ(results[0].text, "Test legal text about contracts");
     EXPECT_FLOAT_EQ(results[0].score, 1.0f);
     EXPECT_EQ(results[0].metadata["source"], "test");
 }
 
 TEST_F(PostgresStorageTest, SearchTopK) {
+    const json EMPTY = json::object();
     for (int i = 0; i < 10; ++i) {
         std::vector<float> emb(384, 0.0f);
         emb[i % 384] = 1.0f;
-        storage->insert("test-id-" + std::to_string(i), "Text " + std::to_string(i), emb, {});
+        storage->insert(uid(100 + i), "Text " + std::to_string(i), emb, EMPTY);
     }
 
     std::vector<float> query(384, 0.0f);
     query[0] = 1.0f;
     auto results = storage->search(query, 3);
-    EXPECT_EQ(results.size(), 3);
+    EXPECT_EQ(results.size(), 3u);
 }
 
 TEST_F(PostgresStorageTest, Delete) {
     std::vector<float> embedding(384, 0.0f);
     embedding[0] = 1.0f;
 
-    storage->insert("test-del-1", "To be deleted", embedding, {});
+    storage->insert(ID1, "To be deleted", embedding, json::object());
     auto results = storage->search(embedding, 5);
-    EXPECT_EQ(results.size(), 1);
+    EXPECT_EQ(results.size(), 1u);
 
-    storage->remove({"test-del-1"});
+    storage->remove({ID1});
     results = storage->search(embedding, 5);
-    EXPECT_EQ(results.size(), 0);
+    EXPECT_EQ(results.size(), 0u);
 }
 
 TEST_F(PostgresStorageTest, HealthCheck) {
     auto health = storage->health();
     EXPECT_TRUE(health.healthy);
-    EXPECT_GE(health.total_chunks, 0);
+    EXPECT_GE(health.total_chunks, 0u);
     EXPECT_LT(health.latency.count(), 1000);
 }
 
@@ -99,8 +121,8 @@ TEST_F(PostgresStorageTest, MetadataFilter) {
     std::vector<float> emb(384, 0.0f);
     emb[0] = 1.0f;
 
-    storage->insert("meta-1", "Contract law", emb, {{"category", "contracts"}});
-    storage->insert("meta-2", "Tort law", emb, {{"category", "torts"}});
+    storage->insert(uid(10), "Contract law", emb, {{"category", "contracts"}});
+    storage->insert(uid(11), "Tort law", emb, {{"category", "torts"}});
 
     auto results = storage->search(emb, 10, {{"category", "contracts"}});
     for (const auto& r : results) {
