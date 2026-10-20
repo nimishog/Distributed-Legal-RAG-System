@@ -159,13 +159,18 @@ prune:
 # Quick Health Checks
 # ==========================================
 
+check_http = @code=$$(curl -s -o /dev/null -w "%{http_code}" $(1) 2>/dev/null); \
+	case "$$code" in 200|503) echo "$(2): UP";; *) echo "$(2): DOWN";; esac
+
+check_tcp = @nc -z localhost $(1) 2>/dev/null && echo "$(2): UP (TCP)" || echo "$(2): DOWN"
+
 health:
 	@echo "Checking service health..."
-	@curl -sf http://localhost:8000/health | jq . 2>/dev/null || echo "API Gateway: DOWN"
-	@curl -sf http://localhost:8084/health | jq . 2>/dev/null || echo "Router: DOWN"
-	@curl -sf http://localhost:8081/health 2>/dev/null >/dev/null && echo "DB Shard 0: UP (TCP)" || echo "DB Shard 0: check logs"
-	@curl -sf http://localhost:8082/health 2>/dev/null >/dev/null && echo "DB Shard 1: UP (TCP)" || echo "DB Shard 1: check logs"
-	@curl -sf http://localhost:8083/health 2>/dev/null >/dev/null && echo "DB Shard 2: UP (TCP)" || echo "DB Shard 2: check logs"
+	@$(call check_http,http://localhost:8000/health,API\ Gateway)
+	@$(call check_http,http://localhost:8084/health,Router)
+	@$(call check_tcp,8081,DB\ Shard\ 0)
+	@$(call check_tcp,8082,DB\ Shard\ 1)
+	@$(call check_tcp,8083,DB\ Shard\ 2)
 
 # ==========================================
 # Database Utilities

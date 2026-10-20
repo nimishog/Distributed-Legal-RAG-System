@@ -3,6 +3,7 @@ import logging
 import asyncio
 from fastapi import APIRouter, HTTPException, Request, Depends
 from prometheus_client import Histogram, Counter, Gauge
+from openai import OpenAIError
 
 from ..config import get_settings
 from ..dependencies import get_llm_client, get_router_client, get_semaphore
@@ -154,6 +155,13 @@ async def ask_question(
             DEPENDENCY_ERRORS.labels(dependency="router", operation="search", error_type="connection_error").inc()
             logger.error(f"Router connection error: {e}")
             raise HTTPException(status_code=503, detail="Search service unavailable")
+
+        except OpenAIError as e:
+            REQUEST_RATE.labels(method="POST", endpoint="/ask", status="503").inc()
+            REQUEST_ERRORS.labels(method="POST", endpoint="/ask", error_type="llm_error").inc()
+            DEPENDENCY_ERRORS.labels(dependency="llm", operation="generate", error_type="openai_error").inc()
+            logger.error(f"OpenAI API error: {e}")
+            raise HTTPException(status_code=503, detail="LLM service unavailable")
 
         except RuntimeError as e:
             REQUEST_RATE.labels(method="POST", endpoint="/ask", status="503").inc()

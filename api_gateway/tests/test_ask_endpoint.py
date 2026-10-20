@@ -180,3 +180,23 @@ class TestLLMErrorHandling:
 
         assert response.status_code == 503
         assert "LLM service unavailable" in response.json()["detail"]
+
+
+    @pytest.mark.asyncio
+    async def test_llm_rate_limit_error(self, async_client, mock_router_client, mock_llm_client):
+        from unittest.mock import MagicMock
+        from openai import RateLimitError
+
+        mock_llm_client.generate_answer.side_effect = RateLimitError(
+            "rate limited",
+            response=MagicMock(status_code=429, headers={}),
+            body=None,
+        )
+
+        response = await async_client.post(
+            "/api/ask",
+            json={"question": "Test question", "top_k": 5},
+        )
+
+        assert response.status_code == 503
+        assert "LLM service unavailable" in response.json()["detail"]

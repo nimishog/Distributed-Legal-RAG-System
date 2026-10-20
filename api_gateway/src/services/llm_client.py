@@ -3,7 +3,7 @@ import logging
 from typing import List, Optional
 from dataclasses import dataclass
 
-from openai import AsyncOpenAI, RateLimitError, APIConnectionError, APITimeoutError, InternalServerError
+from openai import AsyncOpenAI, APIConnectionError, APITimeoutError, InternalServerError
 from ..config import get_settings
 from ..schemas.models import Citation, SearchResult
 from ..utils.retry import async_retry_with_backoff, get_circuit_breaker
@@ -113,7 +113,6 @@ class LLMClient:
         exponential_base=2.0,
         jitter=True,
         retryable_exceptions=(
-            RateLimitError,
             APIConnectionError,
             APITimeoutError,
             InternalServerError,
