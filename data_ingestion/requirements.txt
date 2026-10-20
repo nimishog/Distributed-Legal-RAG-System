@@ -2,7 +2,7 @@
 # torch is intentionally NOT listed here: it is installed from the CPU wheel
 # index in the Dockerfile before this file is processed.
 sentence-transformers==3.0.1
-numpy==1.26.4
+numpy>=2.0
 tqdm==4.66.4
 datasets==2.18.0
 huggingface-hub==0.20.0

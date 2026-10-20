@@ -747,7 +747,16 @@ bool Router::handle_write(const json& req, const std::string& raw_request, std::
     for (const auto& tgt : targets) {
         std::string node_response;
         if (send_to_node(tgt, raw_request, node_response)) {
-            successes++;
+            // Only count the write as successful if the shard actually returned
+            // status "ok". send_to_node() returns true on any response, so a
+            // shard-side error would otherwise be masked as success.
+            try {
+                if (json::parse(node_response).value("status", "") == "ok") {
+                    successes++;
+                }
+            } catch (...) {
+                // Unparseable response: treat as failure.
+            }
         }
     }
 
@@ -774,7 +783,13 @@ bool Router::handle_delete(const std::string& raw_request, std::string& response
     for (const auto& tgt : nodes) {
         std::string node_response;
         if (send_to_node(tgt, raw_request, node_response)) {
-            successes++;
+            try {
+                if (json::parse(node_response).value("status", "") == "ok") {
+                    successes++;
+                }
+            } catch (...) {
+                // Unparseable response: treat as failure.
+            }
         }
     }
 

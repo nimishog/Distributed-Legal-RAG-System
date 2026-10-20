@@ -123,7 +123,17 @@ def fetch_local_fallback() -> List[Dict[str, Any]]:
             "metadata": {"source": "FRCP_56", "jurisdiction": "federal", "topic": "civil_procedure"}
         }
     ]
-    return (samples * (MAX_CHUNKS // len(samples) + 1))[:MAX_CHUNKS]
+    # Replicate the samples to reach MAX_CHUNKS, but make each copy unique by
+    # appending a reference marker to the text. Chunk ids are UUIDv5(text), so
+    # identical text would produce duplicate ids and break batch_insert's
+    # ON CONFLICT DO UPDATE (which cannot affect the same row twice).
+    docs = []
+    for i in range(MAX_CHUNKS):
+        sample = samples[i % len(samples)]
+        doc = dict(sample)
+        doc["text"] = sample["text"] + f" [reference {i}]"
+        docs.append(doc)
+    return docs
 
 def main():
     DATA_DIR.mkdir(parents=True, exist_ok=True)

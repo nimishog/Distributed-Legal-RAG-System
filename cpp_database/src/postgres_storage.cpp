@@ -6,6 +6,7 @@
 #include <iostream>
 #include <chrono>
 #include <thread>
+#include <unordered_set>
 
 using json = nlohmann::json;
 
@@ -163,26 +164,38 @@ void PostgresStorage::insert(const std::string& id,
 
 void PostgresStorage::batch_insert(const std::vector<InsertRequest>& requests) {
     if (requests.empty()) return;
-    
+
+    // Deduplicate by id: PostgreSQL's ON CONFLICT DO UPDATE cannot affect the
+    // same row twice within one command, so duplicate ids in a single batch
+    // would abort the whole insert. Keep the first occurrence of each id.
+    std::vector<const InsertRequest*> unique;
+    unique.reserve(requests.size());
+    std::unordered_set<std::string> seen;
+    for (const auto& req : requests) {
+        if (seen.insert(req.id).second) {
+            unique.push_back(&req);
+        }
+    }
+
     auto conn = acquire();
     try {
         pqxx::work txn(*conn);
-        
+
         std::vector<std::string> ids;
         std::vector<std::string> texts;
         std::vector<std::string> embeddings;
         std::vector<std::string> metadatas;
-        
-        ids.reserve(requests.size());
-        texts.reserve(requests.size());
-        embeddings.reserve(requests.size());
-        metadatas.reserve(requests.size());
-        
-        for (const auto& req : requests) {
-            ids.push_back(req.id);
-            texts.push_back(req.text);
-            embeddings.push_back(vector_to_pg_array(req.embedding));
-            metadatas.push_back(req.metadata.dump());
+
+        ids.reserve(unique.size());
+        texts.reserve(unique.size());
+        embeddings.reserve(unique.size());
+        metadatas.reserve(unique.size());
+
+        for (const auto* req : unique) {
+            ids.push_back(req->id);
+            texts.push_back(req->text);
+            embeddings.push_back(vector_to_pg_array(req->embedding));
+            metadatas.push_back(req->metadata.dump());
         }
         
         // Convert vectors to PostgreSQL array format for prepared statement
