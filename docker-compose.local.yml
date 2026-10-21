@@ -168,7 +168,7 @@ services:
       - ROUTER_MAX_QUEUE=1000
     ports:
       - "8080:8080"
-      - "8084:8084"
+      - "18084:8084"
     depends_on:
       - cpp_database_0
       - cpp_database_1

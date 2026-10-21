@@ -68,7 +68,7 @@ up:
 	@echo "  Frontend:        http://localhost:5173"
 	@echo "  Prometheus:      http://localhost:9090"
 	@echo "  Grafana:         http://localhost:3000 (admin/admin)"
-	@echo "  Router:          http://localhost:8084/health"
+	@echo "  Router:          http://localhost:18084/health"
 
 up-db:
 	$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) up -d postgres_0 postgres_1 postgres_2 cpp_database_0 cpp_database_1 cpp_database_2 cpp_router
@@ -108,7 +108,7 @@ test-frontend:
 
 ingest:
 	@echo "Running data ingestion pipeline locally..."
-	$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) --profile ingest run --rm ingestion
+	$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) --profile ingest run --build --rm ingestion
 
 # ==========================================
 # Monitoring
@@ -167,7 +167,7 @@ check_tcp = @nc -z localhost $(1) 2>/dev/null && echo "$(2): UP (TCP)" || echo "
 health:
 	@echo "Checking service health..."
 	@$(call check_http,http://localhost:8000/health,API\ Gateway)
-	@$(call check_http,http://localhost:8084/health,Router)
+	@$(call check_http,http://localhost:18084/health,Router)
 	@$(call check_tcp,8081,DB\ Shard\ 0)
 	@$(call check_tcp,8082,DB\ Shard\ 1)
 	@$(call check_tcp,8083,DB\ Shard\ 2)

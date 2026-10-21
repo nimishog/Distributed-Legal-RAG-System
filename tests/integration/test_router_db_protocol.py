@@ -23,8 +23,8 @@ import pytest
 ROUTER_HOST = os.getenv("ROUTER_HOST", "localhost")
 ROUTER_PORT = int(os.getenv("ROUTER_PORT", "8080"))
 # The router exposes HTTP health endpoints on a SEPARATE port from the binary
-# protocol port (8084 locally, 8081 in prod).
-ROUTER_HTTP_PORT = int(os.getenv("ROUTER_HTTP_PORT", "8084"))
+# protocol port (18084 locally, 8081 in prod).
+ROUTER_HTTP_PORT = int(os.getenv("ROUTER_HTTP_PORT", "18084"))
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORTS = [int(p) for p in os.getenv("DB_PORTS", "8081,8082,8083").split(",")]
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "384"))

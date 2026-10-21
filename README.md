@@ -77,8 +77,9 @@ gateway, the frontend, Prometheus, Grafana, and the metric exporters. Wait
 ```bash
 make ingest
 ```
-Downloads LegalBench, chunks it, embeds it with MiniLM (384-d), and loads it
-through the router.
+Downloads the `isaacus/legal-rag-bench` corpus (Victorian Criminal Charge Book
+passages), chunks it, embeds it with MiniLM (384-d), and loads it through the
+router.
 
 ### 4. Test the system
 ```bash
@@ -247,5 +248,5 @@ MIT License - see LICENSE file for details.
 
 - [pgvector](https://github.com/pgvector/pgvector) for vector similarity in PostgreSQL
 - [sentence-transformers](https://www.sbert.net/) for embeddings
-- [LegalBench](https://github.com/nguha/legalbench) for the legal dataset
+- [Legal RAG Bench](https://huggingface.co/datasets/isaacus/legal-rag-bench) for the legal corpus
 - [OpenAI](https://openai.com/) for GPT-4o-mini

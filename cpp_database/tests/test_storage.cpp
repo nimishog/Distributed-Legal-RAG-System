@@ -32,8 +32,11 @@ protected:
         const char* db_user = std::getenv("TEST_DB_USER");
         const char* db_pass = std::getenv("TEST_DB_PASSWORD");
 
+        // Leave storage null when the DB is unavailable; SetUp()/each test
+        // body then skips. GTEST_SKIP() here does not actually skip the suite
+        // in every googletest build, and a null storage would segfault.
         if (!db_host || !db_port || !db_name || !db_user || !db_pass) {
-            GTEST_SKIP() << "Test database not configured. Set TEST_DB_* env vars to run.";
+            return;
         }
 
         std::string conn = "host=" + std::string(db_host) +
@@ -46,7 +49,8 @@ protected:
 
         auto health = storage->health();
         if (!health.healthy) {
-            GTEST_SKIP() << "Database not healthy: " << health.message;
+            storage.reset();
+            return;
         }
     }
 
@@ -59,7 +63,10 @@ protected:
     }
 
     void SetUp() override {
-        if (storage) clean();
+        if (!storage) {
+            GTEST_SKIP() << "Test database not configured. Set TEST_DB_* env vars to run.";
+        }
+        clean();
     }
 
     void TearDown() override {
@@ -70,6 +77,8 @@ protected:
 std::unique_ptr<PostgresStorage> PostgresStorageTest::storage = nullptr;
 
 TEST_F(PostgresStorageTest, InsertAndSearch) {
+    if (!storage) GTEST_SKIP() << "Test database not configured.";
+
     std::vector<float> embedding(384, 0.0f);
     embedding[0] = 1.0f;
 
@@ -84,6 +93,8 @@ TEST_F(PostgresStorageTest, InsertAndSearch) {
 }
 
 TEST_F(PostgresStorageTest, SearchTopK) {
+    if (!storage) GTEST_SKIP() << "Test database not configured.";
+
     const json EMPTY = json::object();
     for (int i = 0; i < 10; ++i) {
         std::vector<float> emb(384, 0.0f);
@@ -98,6 +109,8 @@ TEST_F(PostgresStorageTest, SearchTopK) {
 }
 
 TEST_F(PostgresStorageTest, Delete) {
+    if (!storage) GTEST_SKIP() << "Test database not configured.";
+
     std::vector<float> embedding(384, 0.0f);
     embedding[0] = 1.0f;
 
@@ -111,6 +124,8 @@ TEST_F(PostgresStorageTest, Delete) {
 }
 
 TEST_F(PostgresStorageTest, HealthCheck) {
+    if (!storage) GTEST_SKIP() << "Test database not configured.";
+
     auto health = storage->health();
     EXPECT_TRUE(health.healthy);
     EXPECT_GE(health.total_chunks, 0u);
@@ -118,6 +133,8 @@ TEST_F(PostgresStorageTest, HealthCheck) {
 }
 
 TEST_F(PostgresStorageTest, MetadataFilter) {
+    if (!storage) GTEST_SKIP() << "Test database not configured.";
+
     std::vector<float> emb(384, 0.0f);
     emb[0] = 1.0f;
 

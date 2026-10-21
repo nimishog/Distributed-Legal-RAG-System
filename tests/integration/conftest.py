@@ -35,6 +35,11 @@ def router_port():
 
 
 @pytest.fixture(scope="session")
+def router_http_port():
+    return int(os.getenv("ROUTER_HTTP_PORT", "18084"))
+
+
+@pytest.fixture(scope="session")
 def db_host():
     return os.getenv("DB_HOST", "localhost")
 

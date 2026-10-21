@@ -7,76 +7,46 @@ DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
 MAX_CHUNKS = int(os.getenv("MAX_INGESTION_CHUNKS", "1000"))
 
 def fetch_legalbench() -> List[Dict[str, Any]]:
-    """Download LegalBench from HuggingFace datasets."""
-    print("Downloading LegalBench from HuggingFace...")
+    """Download a maintained legal passage corpus from HuggingFace datasets.
+
+    Uses ``isaacus/legal-rag-bench`` (corpus subset): ~4,876 passages from the
+    Victorian Criminal Charge Book, published as parquet. The legacy
+    ``nguha/legalbench`` dataset is no longer used: its loading script
+    references data files that are unavailable and it has no RAG passage
+    corpus (its 162 configs are classification/QA tasks).
+    """
+    print("Downloading legal corpus from HuggingFace...")
     try:
         from datasets import load_dataset
-        
-        # Load LegalBench RAG subset (or full dataset)
-        # LegalBench has multiple subsets; 'rag' is designed for RAG tasks
-        dataset = load_dataset("nguha/legalbench", "rag", split="train")
-        print(f"Loaded LegalBench RAG subset: {len(dataset)} examples")
-        
+
+        dataset = load_dataset(
+            "isaacus/legal-rag-bench",
+            "corpus",
+            split="test",
+            trust_remote_code=True,
+        )
+        print(f"Loaded legal-rag-bench corpus: {len(dataset)} examples")
+
         documents = []
         for example in dataset:
-            # LegalBench RAG format typically has: question, answer, context, etc.
-            # We'll use the context as the document text
-            text = example.get("context", "") or example.get("passage", "") or example.get("text", "")
-            question = example.get("question", "")
-            answer = example.get("answer", "")
-            
-            if not text and question:
-                text = f"Question: {question}\nAnswer: {answer}"
-            
+            text = example.get("text", "") or example.get("passage", "") or example.get("context", "")
             if text:
                 documents.append({
                     "text": text,
                     "metadata": {
-                        "source": "legalbench",
-                        "task": example.get("task", "unknown"),
-                        "question": question,
-                        "answer": answer,
-                        "subset": "rag"
+                        "source": "legal-rag-bench",
+                        "title": example.get("title", ""),
+                        "id": str(example.get("id", "")),
+                        "jurisdiction": "australia",
                     }
                 })
-        
-        print(f"Loaded {len(documents)} documents from LegalBench RAG")
+
+        print(f"Loaded {len(documents)} documents from legal-rag-bench")
         return documents[:MAX_CHUNKS]
-        
+
     except Exception as e:
-        print(f"Failed to load LegalBench RAG subset: {e}")
-        print("Trying full LegalBench dataset...")
-        try:
-            from datasets import load_dataset
-            dataset = load_dataset("nguha/legalbench", split="train")
-            print(f"Loaded full LegalBench: {len(dataset)} examples")
-            
-            documents = []
-            for example in dataset:
-                text = example.get("context", "") or example.get("passage", "") or example.get("text", "")
-                question = example.get("question", "")
-                answer = example.get("answer", "")
-                
-                if not text and question:
-                    text = f"Question: {question}\nAnswer: {answer}"
-                
-                if text:
-                    documents.append({
-                        "text": text,
-                        "metadata": {
-                            "source": "legalbench",
-                            "task": example.get("task", "unknown"),
-                            "question": question,
-                            "answer": answer
-                        }
-                    })
-            
-            print(f"Loaded {len(documents)} documents from full LegalBench")
-            return documents[:MAX_CHUNKS]
-            
-        except Exception as e2:
-            print(f"Failed to load full LegalBench: {e2}")
-            raise
+        print(f"Failed to load legal-rag-bench: {e}")
+        raise
 
 def fetch_local_fallback() -> List[Dict[str, Any]]:
     """Fallback: create sample legal documents for local testing."""
