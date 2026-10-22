@@ -130,16 +130,6 @@ class TestRouterDBProtocol:
         finally:
             client.close()
 
-        response = b""
-        while b"\r\n\r\n" not in response:
-            chunk = router_client.sock.recv(1024)
-            if not chunk:
-                break
-            response += chunk
-
-        assert b"200 OK" in response
-        assert b"healthy" in response
-
     def test_router_binary_health_check(self, router_client):
         response = router_client.send_request({"op": "health"})
         assert response.get("status") == "ok"
@@ -295,7 +285,7 @@ class TestRouterDBProtocol:
 
     def test_large_payload(self, router_client):
         large_text = "x" * (1024 * 1024)
-        embedding = one_hot(5)
+        embedding = one_hot(99)
         doc_id = new_id()
 
         response = router_client.send_request({

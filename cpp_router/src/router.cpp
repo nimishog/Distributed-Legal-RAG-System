@@ -76,6 +76,22 @@ bool write_all(int fd, const void* buffer, size_t n) {
     return true;
 }
 
+// Validate the canonical 8-4-4-4-12 UUID form. The `legal_chunks.id` column
+// is a PostgreSQL UUID, so malformed ids are rejected early with INVALID_ARG
+// instead of surfacing as an opaque INTERNAL error.
+bool is_valid_uuid(const std::string& id) {
+    if (id.size() != 36) return false;
+    for (size_t i = 0; i < id.size(); ++i) {
+        char c = id[i];
+        if (i == 8 || i == 13 || i == 18 || i == 23) {
+            if (c != '-') return false;
+        } else if (!std::isxdigit(static_cast<unsigned char>(c))) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 Router::Router(int port, const std::vector<Node>& nodes, int http_port, size_t worker_threads, size_t max_request_queue)
@@ -732,8 +748,19 @@ bool Router::handle_write(const json& req, const std::string& raw_request, std::
     std::string key;
     if (req.value("op", "") == "insert") {
         key = req.value("id", "");
+        if (!key.empty() && !is_valid_uuid(key)) {
+            response = R"({"status":"error","code":"INVALID_ARG","message":"id must be a valid UUID"})";
+            return true;
+        }
     } else {
         auto chunks = req.value("chunks", json::array());
+        for (const auto& chunk : chunks) {
+            const std::string id = chunk.value("id", "");
+            if (!id.empty() && !is_valid_uuid(id)) {
+                response = R"({"status":"error","code":"INVALID_ARG","message":"every chunk id must be a valid UUID"})";
+                return true;
+            }
+        }
         if (!chunks.empty()) key = chunks[0].value("id", "");
     }
 

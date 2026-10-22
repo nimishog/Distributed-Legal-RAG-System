@@ -40,7 +40,7 @@ void PostgresStorage::prepare_statements(pqxx::connection& conn) {
         "LIMIT $2");
 
     conn.prepare("delete_chunks",
-        "DELETE FROM legal_chunks WHERE id = ANY($1)");
+        "DELETE FROM legal_chunks WHERE id = ANY($1::uuid[])");
 
     conn.prepare("count_chunks",
         "SELECT COUNT(*) FROM legal_chunks");
