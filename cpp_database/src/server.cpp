@@ -225,7 +225,11 @@ void Server::process_request(const std::string& request, std::string& response) 
             response = R"({"status":"ok"})";
 
         } else if (op == "search") {
-            std::vector<float> embedding = req["embedding"].get<std::vector<float>>();
+            std::vector<float> embedding = req.value("embedding", std::vector<float>{});
+            if (embedding.empty()) {
+                response = R"({"status":"error","code":"INVALID_ARG","message":"embedding is required"})";
+                return;
+            }
             size_t top_k = req.value("top_k", 10);
             json filter = req.value("filter", json::object());
 

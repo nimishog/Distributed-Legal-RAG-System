@@ -190,7 +190,7 @@ void Router::start() {
     }
 
     running_ = true;
-    health_thread_ = std::thread(&Router::health_check_loop, this);
+    health_thread_ = std::_thread(&Router::health_check_loop, this);
     http_thread_ = std::thread(&Router::run_http_accept_loop, this);
     std::cout << "Router listening on port " << port_ << " (binary), " << http_port_ << " (HTTP)" << std::endl;
     run_accept_loop();
@@ -386,7 +386,21 @@ bool Router::send_to_node(const Node& node, const std::string& request, std::str
     if (write_frame(conn->fd, request)) {
         ok = read_frame(conn->fd, response);
     }
-    release_connection(conn);
+
+    // If the round-trip failed, invalidate the connection so the pool
+    // recreates it on the next acquire instead of reusing a broken fd.
+    if (!ok) {
+        std::lock_guard<std::mutex> lock(pool_mutex_);
+        conn->valid = false;
+        if (conn->fd != -1) {
+            close(conn->fd);
+            conn->fd = -1;
+        }
+        conn->in_use = false;
+        conn->last_used = std::chrono::steady_clock::now();
+    } else {
+        release_connection(conn);
+    }
     return ok;
 }
 
