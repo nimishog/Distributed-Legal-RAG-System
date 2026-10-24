@@ -28,4 +28,4 @@ ENV MAX_INGESTION_CHUNKS=1000 \
     ROUTER_HOST=cpp_router \
     ROUTER_PORT=8080
 
-ENTRYPOINT ["python", "-m", "src.pipeline"]
+ENTRYPOINT ["python3", "-m", "src.pipeline"]

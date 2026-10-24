@@ -15,7 +15,7 @@ def read_secret(secret_name: str) -> str:
 class Settings(BaseSettings):
     router_host: str = Field(default="cpp_router", alias="ROUTER_HOST")
     router_port: int = Field(default=8080, alias="ROUTER_PORT")
-    router_pool_size: int = Field(default=2, alias="ROUTER_POOL_SIZE")
+    router_pool_size: int = Field(default=50, alias="ROUTER_POOL_SIZE")
 
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4o-mini", alias="OPENAI_MODEL")
@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     )
     embedding_device: str = Field(default="cpu", alias="EMBEDDING_DEVICE")
 
-    rate_limit_concurrent: int = Field(default=2, alias="RATE_LIMIT_CONCURRENT")
+    rate_limit_concurrent: int = Field(default=100, alias="RATE_LIMIT_CONCURRENT")
 
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:5173", "https://nimish-legal-rag.duckdns.org"],
