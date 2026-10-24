@@ -15,6 +15,7 @@
 #include <string>
 #include <algorithm>
 #include <nlohmann/json.hpp>
+#include <cctype>
 #include <openssl/sha.h>
 
 using json = nlohmann::json;
