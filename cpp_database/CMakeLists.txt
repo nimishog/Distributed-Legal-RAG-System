@@ -14,9 +14,20 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 find_package(Threads REQUIRED)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(LIBPQXX REQUIRED libpqxx)
-pkg_check_modules(LIBPQ REQUIRED libpq)
+find_package(PostgreSQL REQUIRED)
+
+# Build libpqxx 7.10.7 from source to avoid the GCC 15 exit-time
+# double-free in packaged libpqxx <= 7.10.5 (jtv/libpqxx#1195).
+include(FetchContent)
+FetchContent_Declare(
+    libpqxx
+    GIT_REPOSITORY https://github.com/jtv/libpqxx.git
+    GIT_TAG 7.10.7
+    GIT_SHALLOW TRUE
+)
+set(SKIP_BUILD_TEST ON CACHE BOOL "" FORCE)
+set(BUILD_DOC OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(libpqxx)
 
 # Find std::filesystem (C++17)
 if(CMAKE_CXX_STANDARD VERSION_GREATER_EQUAL 17)
@@ -35,8 +46,6 @@ option(BUILD_TESTS "Build unit tests" ON)
 # Allow FetchContent dependencies (nlohmann/json, googletest) that declare an
 # older cmake_minimum_required to configure under CMake >= 4.
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-
-include(FetchContent)
 
 FetchContent_Declare(
     nlohmann_json
@@ -70,17 +79,15 @@ set(SOURCES
 )
 
 add_executable(database_server ${SOURCES})
-target_include_directories(database_server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(database_server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${PostgreSQL_INCLUDE_DIRS})
 target_link_libraries(database_server PRIVATE
-    ${LIBPQXX_LIBRARIES}
-    ${LIBPQ_LIBRARIES}
+    libpqxx::pqxx
+    ${PostgreSQL_LIBRARIES}
     Threads::Threads
     nlohmann_json::nlohmann_json
     fmt::fmt
     ${STD_FILESYSTEM_LIBRARIES}
 )
-target_include_directories(database_server PRIVATE ${LIBPQXX_INCLUDE_DIRS} ${LIBPQ_INCLUDE_DIRS})
-target_compile_options(database_server PRIVATE ${LIBPQXX_CFLAGS_OTHER} ${LIBPQ_CFLAGS_OTHER})
 
 if(BUILD_TESTS)
     add_executable(run_tests
@@ -89,17 +96,18 @@ if(BUILD_TESTS)
         src/postgres_storage.cpp
         src/vector_math.cpp
     )
-    target_include_directories(run_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_include_directories(run_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${PostgreSQL_INCLUDE_DIRS}
+    )
     target_link_libraries(run_tests PRIVATE
         gtest_main
         Threads::Threads
-        ${LIBPQXX_LIBRARIES}
-        ${LIBPQ_LIBRARIES}
+        libpqxx::pqxx
+        ${PostgreSQL_LIBRARIES}
         nlohmann_json::nlohmann_json
         fmt::fmt
         ${STD_FILESYSTEM_LIBRARIES}
     )
-    target_include_directories(run_tests PRIVATE ${LIBPQXX_INCLUDE_DIRS} ${LIBPQ_INCLUDE_DIRS})
-    target_compile_options(run_tests PRIVATE ${LIBPQXX_CFLAGS_OTHER} ${LIBPQ_CFLAGS_OTHER})
     add_test(NAME DatabaseTests COMMAND run_tests)
 endif()

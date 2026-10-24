@@ -17,7 +17,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake g++ pkg-config libssl-dev libpqxx-dev libpq-dev
+          sudo apt-get install -y cmake g++ pkg-config libssl-dev libpq-dev
 
       - name: Build and test cpp_database
         run: |

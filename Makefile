@@ -71,7 +71,8 @@ up:
 	@echo "  Router:          http://localhost:18084/health"
 
 up-db:
-	$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) up -d postgres_0 postgres_1 postgres_2 cpp_database_0 cpp_database_1 cpp_database_2 cpp_router
+	$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) up -d --build \
+	  postgres_0 postgres_1 postgres_2 cpp_database_0 cpp_database_1 cpp_database_2 cpp_router
 
 down:
 	$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) down --remove-orphans
@@ -95,8 +96,8 @@ test-cpp:
 
 test-py:
 	@echo "Running Python tests..."
-	@cd data_ingestion && python -m pytest tests/ -v
-	@cd api_gateway && python -m pytest tests/ -v
+	@cd data_ingestion && python3 -m pytest tests/ -v
+	@cd api_gateway && python3 -m pytest tests/ -v
 
 test-frontend:
 	@echo "Running Frontend tests..."
