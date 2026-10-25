@@ -87,17 +87,15 @@ class RouterClient:
         self._lock = asyncio.Lock()
         self._initialized = False
         self._closed = False
+        self._total_connections = 0
 
     async def initialize(self):
         async with self._lock:
             if self._initialized:
                 return
-            for _ in range(self.pool_size):
-                conn = await self._create_connection()
-                if conn:
-                    await self._pool.put(conn)
             self._initialized = True
-            logger.info(f"Router client pool initialized with {self._pool.qsize()} connections")
+            self._total_connections = 0
+            logger.info("Router client pool initialized (lazy connections)")
 
     async def _create_connection(self) -> Optional[RouterConnection]:
         try:
@@ -129,28 +127,55 @@ class RouterClient:
         if self._closed:
             logger.error("Cannot acquire connection: client is closed")
             return None
-            
+
+        # Try to get an idle connection from the pool without blocking.
         try:
-            conn = await asyncio.wait_for(self._pool.get(), timeout=self.acquire_timeout)
-            if not await self._ensure_connected(conn):
-                new_conn = await self._create_connection()
-                if new_conn:
-                    await self._pool.put(new_conn)
-                    return await self.acquire()
+            conn = self._pool.get_nowait()
+        except asyncio.QueueEmpty:
+            conn = None
+
+        if conn is None:
+            # Pool empty: create a new connection if under the pool_size limit.
+            async with self._lock:
+                if self._total_connections < self.pool_size:
+                    self._total_connections += 1
+                    should_create = True
                 else:
-                    logger.error("Failed to create new router connection")
+                    should_create = False
+
+            if should_create:
+                conn = await self._create_connection()
+                if not conn:
+                    async with self._lock:
+                        self._total_connections -= 1
                     return None
-            conn.in_use = True
-            conn.last_used = asyncio.get_running_loop().time()
-            return conn
-        except asyncio.TimeoutError:
-            logger.error(f"Timeout acquiring connection from pool after {self.acquire_timeout}s (pool_size={self.pool_size})")
-            return None
+            else:
+                # Wait for an existing connection to be released.
+                try:
+                    conn = await asyncio.wait_for(self._pool.get(), timeout=self.acquire_timeout)
+                except asyncio.TimeoutError:
+                    logger.error(f"Timeout acquiring connection from pool after {self.acquire_timeout}s")
+                    return None
+
+        if not await self._ensure_connected(conn):
+            new_conn = await self._create_connection()
+            if not new_conn:
+                async with self._lock:
+                    self._total_connections -= 1
+                logger.error("Failed to create replacement router connection")
+                return None
+            conn = new_conn
+
+        conn.in_use = True
+        conn.last_used = asyncio.get_running_loop().time()
+        return conn
 
     async def release(self, conn: RouterConnection):
         if self._closed:
             conn.close()
             await conn.wait_closed()
+            async with self._lock:
+                self._total_connections -= 1
             return
         conn.in_use = False
         conn.last_used = asyncio.get_running_loop().time()
@@ -231,17 +256,16 @@ class RouterClient:
     async def close(self):
         self._closed = True
         logger.info("Draining router client connection pool...")
-        
+
         # Wait for in-use connections to be released (with timeout)
         max_wait_time = 30.0
         try:
             start_time = asyncio.get_running_loop().time()
         except RuntimeError:
             start_time = 0.0
-        
+
         while True:
-            # Check if all connections are back in the pool
-            if self._pool.qsize() >= self.pool_size:
+            if self._pool.qsize() >= self._total_connections:
                 break
             await asyncio.sleep(0.5)
             try:
@@ -250,7 +274,7 @@ class RouterClient:
                     break
             except RuntimeError:
                 break
-        
+
         # Close all connections in pool
         while not self._pool.empty():
             try:
@@ -261,5 +285,10 @@ class RouterClient:
                 break
             except Exception as e:
                 logger.error(f"Error closing connection: {e}")
-        
-        logger.info("Router client connection pool closed")
+
+        async with self._lock:
+            self._total_connections = 0
+
+        logger.info("Router client connection pool closed")````
+
+cpp_router/src/router.cpp
