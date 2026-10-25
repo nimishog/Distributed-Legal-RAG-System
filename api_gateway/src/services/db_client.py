@@ -289,6 +289,4 @@ class RouterClient:
         async with self._lock:
             self._total_connections = 0
 
-        logger.info("Router client connection pool closed")````
-
-cpp_router/src/router.cpp
+        logger.info("Router client connection pool closed")
