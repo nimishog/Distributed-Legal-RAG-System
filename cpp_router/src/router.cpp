@@ -190,7 +190,7 @@ void Router::start() {
     }
 
     running_ = true;
-    health_thread_ = std::_thread(&Router::health_check_loop, this);
+    health_thread_ = std::thread(&Router::health_check_loop, this);
     http_thread_ = std::thread(&Router::run_http_accept_loop, this);
     std::cout << "Router listening on port " << port_ << " (binary), " << http_port_ << " (HTTP)" << std::endl;
     run_accept_loop();
@@ -835,14 +835,17 @@ bool Router::handle_delete(const std::string& raw_request, std::string& response
         }
     }
 
-    if (successes == 0) {
-        response = R"({"status":"error","code":"UPSTREAM_FAILED","message":"All upstreams failed"})";
+    // A broadcast delete must succeed on every healthy shard before we report
+    // success to the caller. Partial deletes leave the system in an
+    // inconsistent state where a document can still be found on a shard that
+    // did not acknowledge the deletion.
+    if (successes < static_cast<int>(nodes.size())) {
+        response = R"({"status":"error","code":"UPSTREAM_FAILED","message":"Not all upstreams acknowledged delete"})";
         return true;
     }
 
     json resp;
     resp["status"] = "ok";
-    resp["partial"] = successes < static_cast<int>(nodes.size());
     response = resp.dump();
     return true;
 }
