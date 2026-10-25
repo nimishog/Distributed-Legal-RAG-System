@@ -50,6 +50,7 @@ constexpr std::chrono::seconds IDLE_TIMEOUT{60};
 constexpr std::chrono::seconds SHUTDOWN_TIMEOUT{30};
 constexpr std::chrono::seconds DEDUP_TTL{5};
 constexpr std::chrono::seconds DNS_TTL{300};
+constexpr std::chrono::seconds REQUEST_DEADLINE{10};
 
 namespace {
 
@@ -617,6 +618,7 @@ void Router::handle_client(int client_fd) {
     InFlightGuard guard(in_flight_requests_);
 
     while (running_) {
+        auto request_start = std::chrono::steady_clock::now();
         std::string request;
         if (!read_frame(client_fd, request)) {
             break;
@@ -680,6 +682,17 @@ void Router::handle_client(int client_fd) {
             std::lock_guard<std::mutex> lock(dedup_mutex_);
             auto expires_at = std::chrono::steady_clock::now() + dedup_ttl_;
             request_cache_[cache_key] = RequestCacheEntry{response, expires_at};
+        }
+
+        // Enforce per-request deadline so a slow upstream does not block
+        // the client indefinitely.
+        auto elapsed = std::chrono::steady_clock::now() - request_start;
+        if (elapsed >= REQUEST_DEADLINE) {
+            response = R"({"status":"error","code":"REQUEST_TIMEOUT","message":"Request deadline exceeded"})";
+            if (!write_frame(client_fd, response)) {
+                break;
+            }
+            break;
         }
 
         if (!write_frame(client_fd, response)) {
@@ -786,15 +799,29 @@ bool Router::handle_write(const json& req, const std::string& raw_request, std::
         return true;
     }
 
+    // Issue inserts to the replica nodes concurrently so the slowest node
+    // determines latency rather than the sum of both nodes.
+    std::vector<std::string> node_responses(targets.size());
+    std::vector<std::future<bool>> futures;
+    futures.reserve(targets.size());
+    for (size_t i = 0; i < targets.size(); ++i) {
+        futures.push_back(std::async(std::launch::async, [this, &targets, &raw_request, &node_responses, i]() {
+            std::string resp;
+            bool ok = send_to_node(targets[i], raw_request, resp);
+            node_responses[i] = std::move(resp);
+            return ok;
+        }));
+    }
+
     int successes = 0;
-    for (const auto& tgt : targets) {
-        std::string node_response;
-        if (send_to_node(tgt, raw_request, node_response)) {
+    for (size_t i = 0; i < targets.size(); ++i) {
+        bool ok = futures[i].get();
+        if (ok) {
             // Only count the write as successful if the shard actually returned
             // status "ok". send_to_node() returns true on any response, so a
             // shard-side error would otherwise be masked as success.
             try {
-                if (json::parse(node_response).value("status", "") == "ok") {
+                if (json::parse(node_responses[i]).value("status", "") == "ok") {
                     successes++;
                 }
             } catch (...) {

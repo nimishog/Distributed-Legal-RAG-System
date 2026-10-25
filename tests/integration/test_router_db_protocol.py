@@ -50,7 +50,7 @@ class ProtocolClient:
 
     def connect(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.settimeout(10)
+        self.sock.settimeout(60)
         self.sock.connect((self.host, self.port))
 
     def close(self):
