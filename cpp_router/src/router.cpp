@@ -674,8 +674,9 @@ void Router::handle_client(int client_fd) {
             break;
         }
 
-        // Cache successful responses for deduplication.
-        if (response.find("\"status\":\"ok\"") != std::string::npos) {
+        // Do not cache search responses: they are not idempotent across
+        // inserts/deletes and would return stale results.
+        if (op != "search" && response.find("\"status\":\"ok\"") != std::string::npos) {
             std::lock_guard<std::mutex> lock(dedup_mutex_);
             auto expires_at = std::chrono::steady_clock::now() + dedup_ttl_;
             request_cache_[cache_key] = RequestCacheEntry{response, expires_at};
