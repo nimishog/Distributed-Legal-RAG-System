@@ -61,6 +61,41 @@ Password: admin
 | Container Memory | < 80% of limits |
 | All Services | UP (1) |
 
+## Using Grafana During k6 Stress Tests (for Screenshots)
+
+1. **Start the monitoring stack** (if it is not already running):
+   ```bash
+   chmod +x scripts/setup-monitoring.sh
+   ./scripts/setup-monitoring.sh
+   ```
+   This starts Prometheus, Grafana, and the exporters defined in
+   `docker-compose.local.yml`.
+
+2. **Verify Prometheus is scraping the gateway**:
+   Open http://localhost:9090/targets and confirm `api-gateway` shows `UP`.
+
+3. **Open Grafana**:
+   http://localhost:3000 (admin/admin). The "Distributed Legal RAG - System
+   Overview" dashboard is auto-provisioned from `grafana-dashboard.json`.
+
+4. **Run your k6 test** in another terminal:
+   ```bash
+   make load-test
+   # or against production:
+   k6 run -e BASE_URL=https://nimish-legal-rag.duckdns.org k6-load-test.js
+   ```
+
+5. **Take screenshots** while the test is running. The most useful panels for
+   load-test evidence are:
+   - API Gateway Request Rate (req/s)
+   - API Gateway Latency (seconds) — watch p95 climb
+   - LLM Token Throughput
+   - System RAM / Swap / CPU Usage
+   - Container Memory Usage
+
+6. **After the test**, leave Grafana running for a few minutes so the
+   `rate()` queries have data to display in the final screenshots.
+
 ## Troubleshooting
 
 ### No Data in Panels
