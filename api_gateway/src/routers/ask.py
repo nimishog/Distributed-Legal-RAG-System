@@ -86,7 +86,7 @@ async def ask_question(
 
     # Bounded queueing / fail-fast
     try:
-        await asyncio.wait_for(semaphore.acquire(), timeout=2.0)
+        await asyncio.wait_for(semaphore.acquire(), timeout=30.0)
     except asyncio.TimeoutError:
         REQUEST_RATE.labels(method="POST", endpoint="/ask", status="503").inc()
         REQUEST_ERRORS.labels(method="POST", endpoint="/ask", error_type="server_busy").inc()
