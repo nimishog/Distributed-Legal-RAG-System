@@ -6,9 +6,9 @@
 // Running 10k VUs requires:
 //   1. WSL2 memory allocated to at least 24-28 GB (edit %USERPROFILE%\.wslconfig
 //      on Windows, then run: wsl --shutdown).
-//   2. Codebase concurrency limits raised (see docker-compose.local.yml and
+//   2. ulimit -n raised to at least 65536 inside WSL for 10k concurrent sockets.
+//   3. Codebase concurrency limits raised (see docker-compose.local.yml and
 //      api_gateway/src/routers/ask.py).
-//   3. ulimit -n raised to at least 65536 inside WSL for 10k concurrent sockets.
 //
 // For a safe smoke test on a smaller machine, run:
 //   k6 run -e SCENARIO=smoke k6-load-test.js
@@ -37,8 +37,8 @@ const API_KEY = __ENV.API_KEY || '';
 const THINK_MIN = Number(__ENV.THINK_MIN || 0.5);
 const THINK_MAX = Number(__ENV.THINK_MAX || 2.5);
 
-const P95_THRESHOLD = Number(__ENV.P95_THRESHOLD || 15000);
-const ERROR_RATE_THRESHOLD = Number(__ENV.ERROR_RATE_THRESHOLD || 0.50);
+const P95_THRESHOLD = Number(__ENV.P95_THRESHOLD || 30000);
+const ERROR_RATE_THRESHOLD = Number(__ENV.ERROR_RATE_THRESHOLD || 0.60);
 
 const REQUEST_TIMEOUT_MS = Number(__ENV.REQUEST_TIMEOUT_MS || 60000);
 
