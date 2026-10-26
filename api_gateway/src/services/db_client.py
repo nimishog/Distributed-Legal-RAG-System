@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import json
 import struct
 import logging
@@ -64,7 +65,10 @@ class RouterConnection:
         await self.writer.wait_closed()
 
 
-_router_circuit_breaker = get_circuit_breaker("api_gateway", "router")
+_router_circuit_breaker = get_circuit_breaker("router", "search")
+
+
+_search_partial_var: contextvars.ContextVar[bool] = contextvars.ContextVar("search_partial", default=False)
 
 
 class RouterClient:
@@ -88,6 +92,10 @@ class RouterClient:
         self._initialized = False
         self._closed = False
         self._total_connections = 0
+
+    @property
+    def last_search_partial(self) -> bool:
+        return _search_partial_var.get()
 
     async def initialize(self):
         async with self._lock:
@@ -189,7 +197,7 @@ class RouterClient:
         jitter=True,
         retryable_exceptions=(ConnectionError, TimeoutError, OSError, IOError),
         circuit_breaker=_router_circuit_breaker,
-        component="api_gateway",
+        component="router",
         operation="search",
     )
     async def search(
@@ -219,6 +227,8 @@ class RouterClient:
 
             if response.get("status") != "ok":
                 raise ConnectionError(f"Router error: {response}")
+
+            _search_partial_var.set(bool(response.get("partial", False)))
 
             results = []
             for r in response.get("results", []):

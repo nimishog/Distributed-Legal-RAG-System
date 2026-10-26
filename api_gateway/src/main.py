@@ -38,9 +38,13 @@ async def lifespan(app: FastAPI):
     router_healthy = await router_client.health_check()
     embedding_loaded = llm_client._embedding_model is not None
 
+    settings = get_settings()
     logger.info(
         f"Startup complete: router_healthy={router_healthy}, "
-        f"embedding_loaded={embedding_loaded}"
+        f"embedding_loaded={embedding_loaded}, "
+        f"workers=1 router_pool={settings.router_pool_size} "
+        f"semaphore={settings.rate_limit_concurrent} "
+        f"llm_mode={settings.llm_mode}"
     )
 
     yield
@@ -85,8 +89,9 @@ async def health_check(
 ):
     router_healthy = await router_client.health_check()
     embedding_loaded = llm_client._embedding_model is not None
+    llm_ready = getattr(llm_client, "llm_ready", True)
 
-    healthy = router_healthy and embedding_loaded
+    healthy = router_healthy and embedding_loaded and llm_ready
 
     body = HealthResponse(
         status="healthy" if healthy else "degraded",

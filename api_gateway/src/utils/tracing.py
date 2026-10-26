@@ -50,8 +50,8 @@ def init_tracing(app=None) -> trace.Tracer:
         except Exception as e:
             logger.warning(f"Failed to configure OTLP exporter: {e}")
     
-    # Always add console exporter for debugging
-    provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
+    if os.getenv("OTEL_CONSOLE_EXPORTER", "false").lower() in ("1", "true", "yes"):
+        provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
     
     # Set global tracer provider
     trace.set_tracer_provider(provider)

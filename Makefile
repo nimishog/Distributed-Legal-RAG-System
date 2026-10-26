@@ -161,7 +161,7 @@ prune:
 # ==========================================
 
 check_http = @code=$$(curl -s -o /dev/null -w "%{http_code}" $(1) 2>/dev/null); \
-	case "$$code" in 200|503) echo "$(2): UP";; *) echo "$(2): DOWN";; esac
+	if [ "$$code" = "200" ]; then echo "$(2): UP ($$code)"; else echo "$(2): DOWN ($$code)"; fi
 
 check_tcp = @nc -z localhost $(1) 2>/dev/null && echo "$(2): UP (TCP)" || echo "$(2): DOWN"
 

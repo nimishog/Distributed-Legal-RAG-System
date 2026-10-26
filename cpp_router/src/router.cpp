@@ -407,63 +407,101 @@ bool Router::send_to_node(const Node& node, const std::string& request, std::str
 
 UpstreamConnection* Router::acquire_connection(const Node& node) {
     UpstreamConnection* conn = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(pool_mutex_);
-        auto& pool = connection_pools_[node.id];
-        auto now = std::chrono::steady_clock::now();
+    auto wait_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (true) {
+        {
+            std::lock_guard<std::mutex> lock(pool_mutex_);
+            auto& pool = connection_pools_[node.id];
+            auto now = std::chrono::steady_clock::now();
 
-        // Clean up idle/invalid connections first.
-        auto it = pool.begin();
-        while (it != pool.end()) {
-            if (!(*it)->in_use &&
-                (now - (*it)->last_used > idle_timeout_ || !(*it)->valid || (*it)->fd == -1)) {
-                it = pool.erase(it);
-            } else {
-                ++it;
+            // Clean up idle/invalid connections first.
+            auto it = pool.begin();
+            while (it != pool.end()) {
+                if (!(*it)->in_use &&
+                    (now - (*it)->last_used > idle_timeout_ || !(*it)->valid || (*it)->fd == -1)) {
+                    it = pool.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+
+            // Prefer an already-connected, free connection.
+            for (auto& c : pool) {
+                if (!c->in_use && c->valid && c->fd != -1) {
+                    c->in_use = true;
+                    c->last_used = now;
+                    conn = c.get();
+                    break;
+                }
+            }
+
+            // Otherwise take any free slot.
+            if (!conn) {
+                for (auto& c : pool) {
+                    if (!c->in_use) {
+                        c->in_use = true;
+                        c->last_used = now;
+                        conn = c.get();
+                        break;
+                    }
+                }
+            }
+
+            // Create a new connection if under the per-node limit.
+            if (!conn && pool.size() < pool_size_per_node_) {
+                pool.push_back(std::make_unique<UpstreamConnection>());
+                conn = pool.back().get();
+                conn->node_id = node.id;
+                conn->in_use = true;
+                conn->last_used = now;
             }
         }
 
-        // Prefer an already-connected, free connection.
-        for (auto& c : pool) {
-            if (!c->in_use && c->valid && c->fd != -1) {
-                c->in_use = true;
-                c->last_used = now;
-                return c.get();
-            }
-        }
+        if (conn) break;
 
-        // Otherwise take any free slot.
-        for (auto& c : pool) {
-            if (!c->in_use) {
-                c->in_use = true;
-                c->last_used = now;
-                conn = c.get();
-                break;
-            }
+        if (std::chrono::steady_clock::now() >= wait_deadline) {
+            return nullptr;
         }
-
-        // Create a new connection if under the per-node limit.
-        if (!conn && pool.size() < pool_size_per_node_) {
-            pool.push_back(std::make_unique<UpstreamConnection>());
-            conn = pool.back().get();
-            conn->node_id = node.id;
-            conn->in_use = true;
-            conn->last_used = now;
-        }
-    }
-
-    if (!conn) {
-        return nullptr;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
     // Connect outside the pool lock so DNS/connect latency does not stall
     // every other request.
     if (conn->fd == -1 || !conn->valid) {
         if (!ensure_connected(conn, node)) {
-            std::lock_guard<std::mutex> lock(pool_mutex_);
-            conn->in_use = false;
-            conn->valid = false;
-            return nullptr;
+            // Retry once on a fresh connection: remove stale slot and create new if possible.
+            {
+                std::lock_guard<std::mutex> lock(pool_mutex_);
+                // mark current invalid
+                conn->valid = false;
+                if (conn->fd != -1) { close(conn->fd); conn->fd = -1; }
+                conn->in_use = false;
+            }
+            // try create new
+            UpstreamConnection* newconn = nullptr;
+            {
+                std::lock_guard<std::mutex> lock(pool_mutex_);
+                auto& pool = connection_pools_[node.id];
+                if (pool.size() < pool_size_per_node_) {
+                    pool.push_back(std::make_unique<UpstreamConnection>());
+                    newconn = pool.back().get();
+                    newconn->node_id = node.id;
+                    newconn->in_use = true;
+                    newconn->last_used = std::chrono::steady_clock::now();
+                }
+            }
+            if (!newconn) {
+                return nullptr;
+            }
+            conn = newconn;
+            if (conn->fd == -1 || !conn->valid) {
+                if (!ensure_connected(conn, node)) {
+                    std::lock_guard<std::mutex> lock(pool_mutex_);
+                    conn->in_use = false;
+                    conn->valid = false;
+                    return nullptr;
+                }
+            }
         }
     }
     return conn;
@@ -652,20 +690,26 @@ void Router::handle_client(int client_fd) {
         std::string response;
         bool handled = false;
 
-        if (op == "health") {
-            response = R"({"status":"ok","healthy":true})";
-            write_frame(client_fd, response);
-            shutdown(client_fd, SHUT_WR);
+        try {
+            if (op == "health") {
+                response = R"({"status":"ok","healthy":true})";
+                write_frame(client_fd, response);
+                shutdown(client_fd, SHUT_WR);
+                handled = true;
+            } else if (op == "search") {
+                handled = handle_search(req, request, response);
+            } else if (op == "insert" || op == "batch_insert") {
+                handled = handle_write(req, request, response);
+            } else if (op == "delete") {
+                handled = handle_delete(request, response);
+            } else {
+                response = R"({"status":"error","code":"INVALID_ARG","message":"Unknown operation"})";
+                handled = true;
+            }
+        } catch (const std::exception& e) {
+            response = R"({"status":"error","code":"UPSTREAM_FAILED","message":"Internal error"})";
             handled = true;
-        } else if (op == "search") {
-            handled = handle_search(req, request, response);
-        } else if (op == "insert" || op == "batch_insert") {
-            handled = handle_write(req, request, response);
-        } else if (op == "delete") {
-            handled = handle_delete(request, response);
-        } else {
-            response = R"({"status":"error","code":"INVALID_ARG","message":"Unknown operation"})";
-            handled = true;
+            LOG_ERROR("handle_client exception: " << e.what());
         }
 
         if (!handled) {
@@ -716,29 +760,30 @@ bool Router::handle_search(const json& req, const std::string& raw_request, std:
     futures.reserve(nodes.size());
     for (size_t i = 0; i < nodes.size(); ++i) {
         futures.push_back(std::async(std::launch::async, [this, &nodes, &raw_request, &raw_responses, i]() {
-            return send_to_node(nodes[i], raw_request, raw_responses[i]);
+            try {
+                return send_to_node(nodes[i], raw_request, raw_responses[i]);
+            } catch (...) {
+                return false;
+            }
         }));
     }
 
-    bool any_success = false;
-    bool all_success = true;
+    int transport_successes = 0;
     for (auto& f : futures) {
-        if (f.get()) any_success = true;
-        else all_success = false;
+        bool ok = false;
+        try { ok = f.get(); } catch (...) { ok = false; }
+        if (ok) transport_successes++;
     }
 
-    if (!any_success) {
-        response = R"({"status":"error","code":"UPSTREAM_FAILED","message":"All upstreams failed"})";
-        return true;
-    }
-
-    // Merge results across shards, deduplicating by id and keeping the max score.
+    // Count application-level successes separately from transport successes.
+    int app_successes = 0;
     std::map<std::string, json> merged;
     for (const auto& raw : raw_responses) {
         if (raw.empty()) continue;
         try {
             json resp = json::parse(raw);
             if (resp.value("status", "") != "ok") continue;
+            app_successes++;
             for (const auto& item : resp.value("results", json::array())) {
                 std::string id = item.value("id", "");
                 if (id.empty()) continue;
@@ -751,6 +796,11 @@ bool Router::handle_search(const json& req, const std::string& raw_request, std:
         } catch (...) {
             continue;
         }
+    }
+
+    if (app_successes == 0) {
+        response = R"({"status":"error","code":"UPSTREAM_FAILED","message":"All upstreams failed"})";
+        return true;
     }
 
     std::vector<json> items;
@@ -768,7 +818,8 @@ bool Router::handle_search(const json& req, const std::string& raw_request, std:
     json resp;
     resp["status"] = "ok";
     resp["results"] = items;
-    resp["partial"] = !all_success;
+    resp["partial"] = (app_successes < static_cast<int>(nodes.size()));
+    resp["search_results_count"] = items.size();
     response = resp.dump();
     return true;
 }

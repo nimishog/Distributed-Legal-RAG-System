@@ -46,11 +46,13 @@ int main() {
     std::string port_str = get_env_or_secret("SERVER_PORT", "8081");
     std::string worker_threads_str = get_env_or_secret("DB_WORKER_THREADS", "4");
     std::string max_queue_str = get_env_or_secret("DB_MAX_QUEUE", "1000");
+    std::string pool_size_str = get_env_or_secret("DB_POOL_SIZE", "4");
 
     int shard_id = std::stoi(shard_id_str);
     int port = std::stoi(port_str);
     size_t worker_threads = std::stoul(worker_threads_str);
     size_t max_queue_size = std::stoul(max_queue_str);
+    size_t pool_size = std::stoul(pool_size_str);
 
     std::string conn_string = "host=" + db_host +
                               " port=" + db_port +
@@ -59,11 +61,11 @@ int main() {
                               " password=" + db_password;
 
     std::cout << "Starting database shard " << shard_id << " on port " << port << std::endl;
-    std::cout << "Worker threads: " << worker_threads << ", Max queue: " << max_queue_size << std::endl;
+    std::cout << "Worker threads: " << worker_threads << ", Max queue: " << max_queue_size << ", Pool size: " << pool_size << std::endl;
     std::cout << "Connecting to PostgreSQL at " << db_host << ":" << db_port << std::endl;
 
     try {
-        auto storage = std::make_unique<PostgresStorage>(conn_string, 4);
+        auto storage = std::make_unique<PostgresStorage>(conn_string, pool_size);
         auto health = storage->health();
         if (!health.healthy) {
             std::cerr << "Database health check failed: " << health.message << std::endl;

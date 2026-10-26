@@ -1,22 +1,36 @@
 // ==========================================
 // Distributed Legal RAG - k6 Load Test
-// 10,000 VU stress test for portfolio demonstration
-// Run: k6 run -e BASE_URL=https://nimish-legal-rag.duckdns.org k6-load-test.js
 // ==========================================
 
 import http from 'k6/http';
 import { check, sleep, group } from 'k6';
 import { Rate, Trend, Counter } from 'k6/metrics';
 import { SharedArray } from 'k6/data';
+import { textSummary } from 'https://jslib.k6.io/k6-summary/0.0.2/index.js';
 
 // ==========================================
 // Configuration
 // ==========================================
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8000';
-const SCENARIO = __ENV.SCENARIO || 'ramp_10k';
+const SCENARIO = __ENV.SCENARIO || 'smoke';
 
-// Legal questions for realistic query patterns
+const MAX_VUS = Number(__ENV.MAX_VUS || 10000);
+const SOAK_VUS = Number(__ENV.SOAK_VUS || 1000);
+const SMOKE_VUS = Number(__ENV.SMOKE_VUS || 5);
+const SPIKE_VUS = Number(__ENV.SPIKE_VUS || 5000);
+
+const API_KEY = __ENV.API_KEY || '';
+
+const THINK_MIN = Number(__ENV.THINK_MIN || 0.5);
+const THINK_MAX = Number(__ENV.THINK_MAX || 2.5);
+
+const P95_THRESHOLD = Number(__ENV.P95_THRESHOLD || 5000);
+const ERROR_RATE_THRESHOLD = Number(__ENV.ERROR_RATE_THRESHOLD || 0.20);
+
+const REQUEST_TIMEOUT_MS = Number(__ENV.REQUEST_TIMEOUT_MS || 30000);
+
+// Legal questions
 const LEGAL_QUESTIONS = new SharedArray('questions', function() {
   return [
     "What is the statute of limitations for breach of contract in California?",
@@ -28,17 +42,7 @@ const LEGAL_QUESTIONS = new SharedArray('questions', function() {
     "How does the Erie doctrine apply in diversity jurisdiction?",
     "What is the standard for summary judgment in federal court?",
     "What constitutes a material breach of contract?",
-    "How are damages calculated in intellectual property infringement?",
-    "What is the doctrine of res judicata and when does it apply?",
-    "What are the elements of a trade secret misappropriation claim?",
-    "How does the collateral source rule affect damage awards?",
-    "What is the difference between void and voidable contracts?",
-    "When can a court pierce the corporate veil?",
-    "What are the requirements for a valid class action certification?",
-    "How does the statute of frauds apply to oral agreements?",
-    "What is the standard for preliminary injunction relief?",
-    "What constitutes adverse possession in property law?",
-    "How does the parol evidence rule affect contract interpretation?"
+    "How are damages calculated in intellectual property infringement?"
   ];
 });
 
@@ -49,102 +53,87 @@ const searchLatency = new Trend('search_latency');
 const llmLatency = new Trend('llm_latency');
 const totalRequests = new Counter('total_requests');
 const successfulRequests = new Counter('successful_requests');
+const emptyResults = new Rate('empty_results');
 
-// ==========================================
-// Test Scenarios
-// ==========================================
-
-export const options = {
-  scenarios: {
-    // Ramp up to 10k VUs over 5 minutes, sustain for 10 minutes, ramp down
-    ramp_10k: {
-      executor: 'ramping-vus',
-      startVUs: 0,
-      stages: [
-        { duration: '5m', target: 10000 },  // Ramp up
-        { duration: '10m', target: 10000 }, // Sustain
-        { duration: '2m', target: 0 }       // Ramp down
-      ],
-      gracefulRampDown: '30s',
-    },
-    // Spike test: sudden burst
-    spike_test: {
-      executor: 'ramping-vus',
-      startVUs: 0,
-      stages: [
-        { duration: '30s', target: 100 },   // Warm up
-        { duration: '1m', target: 5000 },   // Spike
-        { duration: '2m', target: 5000 },   // Sustain spike
-        { duration: '30s', target: 0 }      // Ramp down
-      ],
-    },
-    // Stress test: gradual increase to find breaking point
-    stress_test: {
-      executor: 'ramping-vus',
-      startVUs: 0,
-      stages: [
-        { duration: '2m', target: 100 },
-        { duration: '2m', target: 500 },
-        { duration: '2m', target: 1000 },
-        { duration: '2m', target: 2000 },
-        { duration: '2m', target: 5000 },
-        { duration: '5m', target: 10000 },
-        { duration: '2m', target: 0 }
-      ],
-    },
-    // Soak test: sustained load for extended period
-    soak_test: {
-      executor: 'constant-vus',
-      vus: 1000,
-      duration: '30m',
-    }
+const SCENARIOS = {
+  smoke: {
+    executor: 'constant-vus',
+    vus: SMOKE_VUS,
+    duration: __ENV.SMOKE_DURATION || '1m',
   },
-
-  // Thresholds - these define pass/fail for CI
-  thresholds: {
-    // Overall request duration (p95 < 2s for normal, higher for stress)
-    'request_duration': ['p(95)<5000'],  // 5s for demo on t3.micro
-    // Error rate should be < 10% (demo will exceed this under load - documented)
-    'errors': ['rate<0.20'],
-    // HTTP success rate
-    'http_req_failed': ['rate<0.15'],
-    // Check specific endpoints
-    'checks': ['rate>0.80'],
+  ramp_10k: {
+    executor: 'ramping-vus',
+    startVUs: 0,
+    stages: [
+      { duration: '5m', target: MAX_VUS },
+      { duration: '10m', target: MAX_VUS },
+      { duration: '2m', target: 0 },
+    ],
+    gracefulRampDown: '30s',
   },
-
-  // Output configuration
-  summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)', 'p(99.9)'],
-
-  // Tags for filtering
-  tags: {
-    project: 'legal-rag',
-    environment: __ENV.ENVIRONMENT || 'local',
+  spike_test: {
+    executor: 'ramping-vus',
+    startVUs: 0,
+    stages: [
+      { duration: '30s', target: 100 },
+      { duration: '1m', target: SPIKE_VUS },
+      { duration: '2m', target: SPIKE_VUS },
+      { duration: '30s', target: 0 },
+    ],
+  },
+  stress_test: {
+    executor: 'ramping-vus',
+    startVUs: 0,
+    stages: [
+      { duration: '2m', target: 100 },
+      { duration: '2m', target: 500 },
+      { duration: '2m', target: 1000 },
+      { duration: '2m', target: 2000 },
+      { duration: '2m', target: 5000 },
+      { duration: '5m', target: MAX_VUS },
+      { duration: '2m', target: 0 },
+    ],
+  },
+  soak_test: {
+    executor: 'constant-vus',
+    vus: SOAK_VUS,
+    duration: __ENV.SOAK_DURATION || '30m',
   },
 };
 
-// ==========================================
-// Helper Functions
-// ==========================================
+if (!SCENARIOS[SCENARIO]) {
+  throw new Error(`Unknown SCENARIO: ${SCENARIO}`);
+}
+
+export const options = {
+  scenarios: {
+    [SCENARIO]: SCENARIOS[SCENARIO],
+  },
+  thresholds: {
+    'http_req_duration': [`p(95)<${P95_THRESHOLD}`],
+    'errors': [`rate<${ERROR_RATE_THRESHOLD}`],
+    'http_req_failed': [`rate<${ERROR_RATE_THRESHOLD}`],
+    'checks': ['rate>0.99'],
+    'empty_results': ['rate<0.10'],
+  },
+  summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'],
+};
 
 function getRandomQuestion() {
   return LEGAL_QUESTIONS[Math.floor(Math.random() * LEGAL_QUESTIONS.length)];
 }
 
 function buildHeaders() {
-  return {
+  const h = {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
-    'User-Agent': 'k6-load-test/1.0',
   };
+  if (API_KEY) h['X-API-Key'] = API_KEY;
+  return h;
 }
-
-// ==========================================
-// Main Test Function
-// ==========================================
 
 export default function () {
   const question = getRandomQuestion();
-  const startTime = new Date();
 
   group('Legal RAG Query', function () {
     const payload = JSON.stringify({
@@ -155,78 +144,66 @@ export default function () {
 
     const params = {
       headers: buildHeaders(),
-      timeout: '30s',  // Generous timeout for overloaded system
+      timeout: `${REQUEST_TIMEOUT_MS}ms`,
     };
 
     const res = http.post(`${BASE_URL}/api/ask`, payload, params);
 
-    const duration = new Date() - startTime;
-    requestDuration.add(duration);
+    requestDuration.add(res.timings.duration);
     totalRequests.add(1);
+
+    let body = null;
+    try {
+      body = res.body ? JSON.parse(res.body) : null;
+    } catch (e) {
+      body = null;
+    }
 
     const success = check(res, {
       'status is 200': (r) => r.status === 200,
-      'has answer field': (r) => {
-        try {
-          const body = JSON.parse(r.body);
-          return body.answer !== undefined;
-        } catch (e) {
-          return false;
-        }
-      },
-      'has citations': (r) => {
-        try {
-          const body = JSON.parse(r.body);
-          return Array.isArray(body.citations);
-        } catch (e) {
-          return false;
-        }
-      },
-      'response time < 30s': (r) => r.timings.duration < 30000,
+      'has answer': () => body && typeof body.answer === 'string' && body.answer.length > 0,
+      'has citations array': () => body && Array.isArray(body.citations),
+      'response within timeout': (r) => r.timings.duration < REQUEST_TIMEOUT_MS,
+      'has search_results_count': () => body && typeof body.search_results_count === 'number',
+      'not partial': () => body && body.partial === false,
     });
 
     errorRate.add(!success);
 
     if (success) {
       successfulRequests.add(1);
-
-      // Parse response for detailed metrics
-      try {
-        const body = JSON.parse(res.body);
-        if (body.search_latency_ms) searchLatency.add(body.search_latency_ms);
-        if (body.llm_latency_ms) llmLatency.add(body.llm_latency_ms);
-      } catch (e) {
-        // Ignore parse errors
+      if (body && body.search_latency_ms) searchLatency.add(body.search_latency_ms);
+      if (body && body.llm_latency_ms) llmLatency.add(body.llm_latency_ms);
+      if (body && Array.isArray(body.citations)) {
+        emptyResults.add(body.citations.length === 0);
       }
     } else {
-      // Log failures for debugging
-      if (res.status !== 200) {
-        console.error(`Request failed: ${res.status} - ${res.body.substring(0, 200)}`);
+      if (res.status !== 200 && Math.random() < 0.01) {
+        console.error(`Request failed: ${res.status} - ${String(res.body).substring(0, 200)}`);
       }
     }
   });
 
-  // Think time - simulate human reading time
-  // Shorter under high load to maximize throughput
-  const thinkTime = __ENV.SCENARIO === 'ramp_10k' ? Math.random() * 2 + 0.5 : Math.random() * 5 + 1;
+  const thinkTime = THINK_MIN + Math.random() * (THINK_MAX - THINK_MIN);
   sleep(thinkTime);
 }
-
-// ==========================================
-// Setup & Teardown
-// ==========================================
 
 export function setup() {
   console.log(`Starting load test against: ${BASE_URL}`);
   console.log(`Scenario: ${SCENARIO}`);
-  console.log(`Legal questions pool: ${LEGAL_QUESTIONS.length}`);
+  console.log(`MAX_VUS: ${MAX_VUS}`);
 
-  // Warm-up request to ensure services are up
-  const warmup = http.get(`${BASE_URL}/health`, { timeout: '10s' });
-  if (warmup.status !== 200) {
-    console.warn(`Health check failed: ${warmup.status}`);
-  } else {
-    console.log('Health check passed - services are up');
+  const health = http.get(`${BASE_URL}/health`, { timeout: '10s' });
+  if (health.status !== 200) {
+    throw new Error(`Preflight failed: /health returned ${health.status}`);
+  }
+  console.log('Health check passed - services are up');
+
+  if (__ENV.PREFLIGHT_ASK === 'true') {
+    const res = http.post(`${BASE_URL}/api/ask`, JSON.stringify({ question: 'preflight', top_k: 1 }), { headers: buildHeaders(), timeout: '10s' });
+    if (res.status !== 200) {
+      throw new Error(`Preflight /api/ask failed: ${res.status}`);
+    }
   }
 
   return { startTime: new Date().toISOString() };
@@ -235,73 +212,12 @@ export function setup() {
 export function teardown(data) {
   const duration = (new Date() - new Date(data.startTime)) / 1000;
   console.log(`Load test completed in ${duration.toFixed(1)}s`);
-  console.log(`Base URL: ${BASE_URL}`);
-  console.log('Check Grafana dashboards for detailed metrics');
 }
-
-// ==========================================
-// Custom Summary (for CI output)
-// ==========================================
 
 export function handleSummary(data) {
   const summary = {
     'stdout': textSummary(data, { indent: ' ', enableColors: true }),
     'summary.json': JSON.stringify(data, null, 2),
   };
-
-  // Also write to file for CI artifacts
   return summary;
-}
-
-function textSummary(data, options) {
-  const { indent = '', enableColors = false } = options || {};
-  const metrics = data.metrics;
-
-  let output = '\n';
-  output += `${indent}╔══════════════════════════════════════════════════════════════╗\n`;
-  output += `${indent}║           LEGAL RAG LOAD TEST SUMMARY                       ║\n`;
-  output += `${indent}╠══════════════════════════════════════════════════════════════╣\n`;
-
-  // HTTP metrics
-  if (metrics.http_reqs) {
-    output += `${indent}║ HTTP Requests: ${metrics.http_reqs.values.count}                                        ║\n`;
-  }
-  if (metrics.http_req_duration) {
-    const d = metrics.http_req_duration.values;
-    output += `${indent}║ HTTP Duration: avg=${d.avg.toFixed(0)}ms p95=${d['p(95)'].toFixed(0)}ms p99=${d['p(99)'].toFixed(0)}ms     ║\n`;
-  }
-  if (metrics.http_req_failed) {
-    const rate = (metrics.http_req_failed.values.passes / metrics.http_req_failed.values.count * 100).toFixed(1);
-    output += `${indent}║ HTTP Error Rate: ${rate}%                                        ║\n`;
-  }
-
-  // Custom metrics
-  if (metrics.request_duration) {
-    const d = metrics.request_duration.values;
-    output += `${indent}║ Total Duration:  avg=${d.avg.toFixed(0)}ms p95=${d['p(95)'].toFixed(0)}ms             ║\n`;
-  }
-  if (metrics.search_latency) {
-    const d = metrics.search_latency.values;
-    output += `${indent}║ Search Latency:  avg=${d.avg.toFixed(0)}ms p95=${d['p(95)'].toFixed(0)}ms             ║\n`;
-  }
-  if (metrics.llm_latency) {
-    const d = metrics.llm_latency.values;
-    output += `${indent}║ LLM Latency:     avg=${d.avg.toFixed(0)}ms p95=${d['p(95)'].toFixed(0)}ms             ║\n`;
-  }
-  if (metrics.errors) {
-    const rate = (metrics.errors.values.passes / metrics.errors.values.count * 100).toFixed(1);
-    output += `${indent}║ Check Error Rate: ${rate}%                                      ║\n`;
-  }
-
-  output += `${indent}╚══════════════════════════════════════════════════════════════╝\n`;
-
-  // Threshold status
-  output += '\n';
-  output += `${indent}Thresholds:\n`;
-  for (const [name, threshold] of Object.entries(data.thresholds)) {
-    const passed = threshold.ok ? '✅ PASS' : '❌ FAIL';
-    output += `${indent}  ${name}: ${passed}\n`;
-  }
-
-  return output;
 }

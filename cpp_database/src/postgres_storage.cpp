@@ -15,7 +15,7 @@ PostgresStorage::PostgresStorage(const std::string& conn_string, size_t pool_siz
     pool_.reserve(pool_size_);
     for (size_t i = 0; i < pool_size_; ++i) {
         pool_.push_back({std::make_unique<pqxx::connection>(conn_string_), false});
-        prepare_statements(*pool_[i].conn);
+        configure_connection(*pool_[i].conn);
     }
 }
 
@@ -50,67 +50,81 @@ void PostgresStorage::prepare_statements(pqxx::connection& conn) {
 }
 
 std::unique_ptr<pqxx::connection> PostgresStorage::acquire() {
-    std::unique_lock<std::mutex> lock(pool_mutex_);
-    
-    // First, try to find an available connection in the pool
-    for (auto& wrapper : pool_) {
-        if (!wrapper.in_use && wrapper.conn) {
-            // Validate connection before reuse
-            if (validate_connection(*wrapper.conn)) {
-                wrapper.in_use = true;
-                return std::move(wrapper.conn);
-            } else {
-                // Connection is stale, create a new one
-                wrapper.conn = std::make_unique<pqxx::connection>(conn_string_);
-                prepare_statements(*wrapper.conn);
-                wrapper.in_use = true;
-                return std::move(wrapper.conn);
+    size_t idx = pool_size_;
+    // Find or reserve a slot under the lock.
+    {
+        std::unique_lock<std::mutex> lock(pool_mutex_);
+        for (size_t i = 0; i < pool_.size(); ++i) {
+            if (!pool_[i].in_use) {
+                pool_[i].in_use = true;
+                idx = i;
+                break;
             }
         }
+        if (idx == pool_size_ && pool_.size() < pool_size_) {
+            pool_.push_back({nullptr, true});
+            idx = pool_.size() - 1;
+        }
     }
-    
-    // If pool has room, create a new connection
-    if (pool_.size() < pool_size_) {
-        auto conn = std::make_unique<pqxx::connection>(conn_string_);
-        prepare_statements(*conn);
-        return conn;
-    }
-    
-    // Pool is at max capacity, wait for a connection to become available
-    // This prevents unbounded growth - wait with timeout
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-    while (true) {
-        for (auto& wrapper : pool_) {
-            if (!wrapper.in_use && wrapper.conn) {
-                if (validate_connection(*wrapper.conn)) {
-                    wrapper.in_use = true;
-                    return std::move(wrapper.conn);
-                } else {
-                    wrapper.conn = std::make_unique<pqxx::connection>(conn_string_);
-                    prepare_statements(*wrapper.conn);
-                    wrapper.in_use = true;
-                    return std::move(wrapper.conn);
+
+    // Wait for a free slot with timeout.
+    if (idx == pool_size_) {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (true) {
+            {
+                std::unique_lock<std::mutex> lock(pool_mutex_);
+                for (size_t i = 0; i < pool_.size(); ++i) {
+                    if (!pool_[i].in_use) {
+                        pool_[i].in_use = true;
+                        idx = i;
+                        break;
+                    }
                 }
             }
+            if (idx != pool_size_) break;
+            if (std::chrono::steady_clock::now() > deadline) {
+                throw std::runtime_error("Timeout waiting for database connection from pool");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-        // All connections in use, wait a bit and retry
-        if (std::chrono::steady_clock::now() > deadline) {
-            throw std::runtime_error("Timeout waiting for database connection from pool");
-        }
-        lock.unlock();
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        lock.lock();
     }
+
+    // Move the connection out of the slot.
+    std::unique_ptr<pqxx::connection> conn;
+    {
+        std::unique_lock<std::mutex> lock(pool_mutex_);
+        conn = std::move(pool_[idx].conn);
+    }
+
+    // Validate/reconnect OUTSIDE the lock. Validate only via is_open; reconnect
+    // on stale connection.
+    bool need_reconnect = (conn == nullptr) || !conn->is_open();
+    if (!need_reconnect) {
+        // lightweight check; no SQL validation per acquire
+    }
+    if (need_reconnect) {
+        try {
+            conn = std::make_unique<pqxx::connection>(conn_string_);
+            configure_connection(*conn);
+        } catch (const std::exception& e) {
+            std::unique_lock<std::mutex> lock(pool_mutex_);
+            pool_[idx].in_use = false;
+            pool_[idx].conn = nullptr;
+            throw;
+        }
+    }
+
+    return conn;
 }
 
-bool PostgresStorage::validate_connection(pqxx::connection& conn) {
+void PostgresStorage::configure_connection(pqxx::connection& conn) {
+    prepare_statements(conn);
     try {
-        if (!conn.is_open()) return false;
         pqxx::work txn(conn);
-        txn.exec_prepared("health_check");
-        return true;
+        txn.exec("SET statement_timeout = '5000'");
+        txn.commit();
     } catch (...) {
-        return false;
+        // Ignore; statement_timeout may not be supported in all contexts.
     }
 }
 
@@ -157,6 +171,7 @@ void PostgresStorage::insert(const std::string& id,
             id, text, vector_to_pg_array(embedding), metadata.dump());
         txn.commit();
     } catch (const std::exception& e) {
+        release(std::move(conn));
         throw std::runtime_error("Insert failed: " + std::string(e.what()));
     }
     release(std::move(conn));
@@ -227,6 +242,7 @@ void PostgresStorage::batch_insert(const std::vector<InsertRequest>& requests) {
             ids_array, texts_array, embeddings_array, metadatas_array);
         txn.commit();
     } catch (const std::exception& e) {
+        release(std::move(conn));
         throw std::runtime_error("Batch insert failed: " + std::string(e.what()));
     }
     release(std::move(conn));
@@ -251,6 +267,7 @@ std::vector<SearchResult> PostgresStorage::search(const std::vector<float>& embe
         }
         txn.commit();
     } catch (const std::exception& e) {
+        release(std::move(conn));
         throw std::runtime_error("Search failed: " + std::string(e.what()));
     }
     release(std::move(conn));
@@ -283,6 +300,7 @@ void PostgresStorage::remove(const std::vector<std::string>& ids) {
         txn.exec_prepared("delete_chunks", ids_array);
         txn.commit();
     } catch (const std::exception& e) {
+        release(std::move(conn));
         throw std::runtime_error("Delete failed: " + std::string(e.what()));
     }
     release(std::move(conn));
@@ -326,6 +344,10 @@ HealthStatus PostgresStorage::health() {
         status.message = "OK";
     } catch (const std::exception& e) {
         status.message = e.what();
+        release(std::move(conn));
+        status.latency = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start);
+        return status;
     }
     release(std::move(conn));
 

@@ -13,7 +13,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 -- ==========================================
 
 -- Connection limits (20 is ample for 3 shards on a 1 GB host)
-ALTER SYSTEM SET max_connections = 20;
+ALTER SYSTEM SET max_connections = 40;
 ALTER SYSTEM SET superuser_reserved_connections = 3;
 
 -- Memory settings (conservative for 1 GB RAM)

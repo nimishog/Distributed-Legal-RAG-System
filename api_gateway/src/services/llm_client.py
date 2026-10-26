@@ -32,7 +32,7 @@ Question: {question}
 Answer with citations [1], [2]..."""
 
 
-_llm_circuit_breaker = get_circuit_breaker("api_gateway", "llm")
+_llm_circuit_breaker = get_circuit_breaker("llm", "generate")
 
 
 class LLMClient:
@@ -40,12 +40,38 @@ class LLMClient:
         self.settings = get_settings()
         self.client: Optional[AsyncOpenAI] = None
         self._embedding_model = None
+        self.llm_mode = (self.settings.llm_mode or "openai").lower()
+        self.llm_ready = False
 
     async def initialize(self):
-        if not self.settings.openai_api_key:
-            logger.warning("OPENAI_API_KEY not set, LLM client will not work")
+        # Limit PyTorch CPU threads to avoid oversubscription.
+        try:
+            import os
+            import torch
+            torch.set_num_threads(int(os.getenv("TORCH_NUM_THREADS", "8")))
+        except Exception as e:
+            logger.debug(f"Could not set torch threads: {e}")
+
+        self.llm_mode = (self.settings.llm_mode or "openai").lower()
+
+        if self.llm_mode == "mock":
+            self.client = None
+            self.llm_ready = True
+            logger.info("LLM client initialized in MOCK mode")
         else:
-            self.client = AsyncOpenAI(api_key=self.settings.openai_api_key)
+            key = self.settings.openai_api_key or ""
+            placeholder = (not key) or key.startswith("sk-your-") or "your-openai" in key
+            if placeholder:
+                logger.warning("OPENAI_API_KEY missing or placeholder; LLM client will not work")
+                self.client = None
+                self.llm_ready = False
+            else:
+                self.client = AsyncOpenAI(
+                    api_key=key,
+                    timeout=30.0,
+                    max_retries=1,
+                )
+                self.llm_ready = True
 
         # Eagerly load the embedding model so /health reports ready and the
         # first query does not pay the model-load latency. The Docker image
@@ -55,12 +81,22 @@ class LLMClient:
 
     def _load_embedding_model(self):
         if self._embedding_model is None:
+            try:
+                import os
+                import torch
+                torch.set_num_threads(int(os.getenv("TORCH_NUM_THREADS", "8")))
+            except Exception:
+                pass
             from sentence_transformers import SentenceTransformer
             logger.info(f"Loading embedding model: {self.settings.embedding_model}")
             self._embedding_model = SentenceTransformer(
                 self.settings.embedding_model,
                 device=self.settings.embedding_device,
             )
+        # Embedding model loaded => health can report ready (independent of LLM mode).
+        if self._embedding_model is not None:
+            if self.llm_mode == "mock":
+                self.llm_ready = True
         return self._embedding_model
 
     def embed_query(self, text: str) -> List[float]:
@@ -120,14 +156,40 @@ class LLMClient:
             TimeoutError,
         ),
         circuit_breaker=_llm_circuit_breaker,
-        component="api_gateway",
-        operation="llm_generate",
+        component="llm",
+        operation="generate",
     )
     async def generate_answer(
         self,
         question: str,
         search_results: List[SearchResult],
     ) -> LLMResponse:
+        if self.llm_mode == "mock":
+            # Deterministic answer for load testing; no OpenAI call.
+            if search_results:
+                answer = "Mock answer based on retrieved legal context [1]."
+                citations = self._extract_citations(search_results, answer)
+                if not citations:
+                    citations = [
+                        Citation(
+                            index=1,
+                            source_id=search_results[0].id,
+                            text=search_results[0].text[:500],
+                            score=search_results[0].score,
+                            metadata=search_results[0].metadata,
+                        )
+                    ]
+            else:
+                answer = "Insufficient context to answer this question."
+                citations = []
+            return LLMResponse(
+                answer=answer,
+                citations=citations,
+                prompt_tokens=0,
+                completion_tokens=0,
+                latency_ms=0.0,
+            )
+
         if not self.client:
             raise RuntimeError("OpenAI client not initialized. Check OPENAI_API_KEY.")
 

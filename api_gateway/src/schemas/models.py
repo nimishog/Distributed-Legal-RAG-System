@@ -31,6 +31,8 @@ class AskResponse(BaseModel):
     llm_latency_ms: float
     total_latency_ms: float
     model: str
+    partial: bool = False
+    search_results_count: int = 0
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 

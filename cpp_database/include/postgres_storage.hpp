@@ -36,7 +36,7 @@ private:
 
     std::unique_ptr<pqxx::connection> acquire();
     void release(std::unique_ptr<pqxx::connection>&& conn);
-    bool validate_connection(pqxx::connection& conn);
+    void configure_connection(pqxx::connection& conn);
 
     std::string conn_string_;
     size_t pool_size_;

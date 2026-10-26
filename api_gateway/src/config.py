@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     openai_max_tokens: int = Field(default=500, alias="OPENAI_MAX_TOKENS")
     openai_temperature: float = Field(default=0.1, alias="OPENAI_TEMPERATURE")
 
+    llm_mode: str = Field(default="openai", alias="LLM_MODE")
+
     api_host: str = Field(default="0.0.0.0", alias="API_HOST")
     api_port: int = Field(default=8000, alias="API_PORT")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
