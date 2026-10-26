@@ -1,52 +1,61 @@
 -- ==========================================
 -- Distributed Legal RAG - Database Initialization
--- pgvector extension, schema, indexes, and low-memory PostgreSQL config
+-- pgvector extension, schema, indexes, and PostgreSQL config
 -- ==========================================
 
 -- Enable pgvector extension
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ==========================================
--- PostgreSQL Configuration for 10k VU Stress Test
--- Each cpp_database node uses DB_POOL_SIZE=256, so each Postgres instance
--- must accept at least 256 concurrent connections plus overhead.
--- Target: 1 GB container limit per Postgres instance.
+-- PostgreSQL Configuration
+--
+-- NOTE: The following ALTER SYSTEM settings are written to
+-- postgresql.auto.conf. Parameters marked "(restart required)" do NOT take
+-- effect until the PostgreSQL server is restarted. pg_reload_conf() only
+-- applies parameters that can be reloaded without a restart.
+--
+-- For the local 10k VU stack, max_connections, shared_buffers, wal_buffers,
+-- and huge_pages require a container restart. If you need them active
+-- immediately, pass them as postgres command-line flags in docker-compose
+-- (e.g., command: ["postgres", "-c", "max_connections=300", ...]) instead of
+-- relying on this init script.
 -- ==========================================
 
--- Connection limits (raised from 40 to 300 to accommodate DB_POOL_SIZE=256)
+-- Connection limits (restart required)
+-- Raised from default 100 to 300 to accommodate DB_POOL_SIZE=256 per shard.
 ALTER SYSTEM SET max_connections = 300;
 ALTER SYSTEM SET superuser_reserved_connections = 10;
 
--- Memory settings (conservative for 1 GB RAM containers)
+-- Memory settings (shared_buffers and huge_pages require restart)
 ALTER SYSTEM SET shared_buffers = '128MB';
 ALTER SYSTEM SET effective_cache_size = '512MB';
 ALTER SYSTEM SET maintenance_work_mem = '64MB';
 ALTER SYSTEM SET work_mem = '16MB';
 ALTER SYSTEM SET huge_pages = 'off';
 
--- Parallelism (disable for low memory / high concurrency)
+-- Parallelism
 ALTER SYSTEM SET max_parallel_workers_per_gather = 0;
 ALTER SYSTEM SET max_parallel_workers = 1;
 ALTER SYSTEM SET max_parallel_maintenance_workers = 1;
 
--- WAL settings (reduce disk I/O)
+-- WAL settings (wal_buffers requires restart)
 ALTER SYSTEM SET wal_buffers = '16MB';
 ALTER SYSTEM SET min_wal_size = '80MB';
 ALTER SYSTEM SET max_wal_size = '1GB';
 ALTER SYSTEM SET checkpoint_completion_target = 0.9;
 
--- Query planner (optimize for limited resources)
+-- Query planner
 ALTER SYSTEM SET random_page_cost = 1.1;
 ALTER SYSTEM SET effective_io_concurrency = 200;
 ALTER SYSTEM SET default_statistics_target = 100;
 
--- Logging (minimal for production)
+-- Logging
 ALTER SYSTEM SET log_min_messages = 'WARNING';
 ALTER SYSTEM SET log_min_error_statement = 'ERROR';
 ALTER SYSTEM SET log_statement = 'none';
 ALTER SYSTEM SET log_duration = 'off';
 
--- Reload configuration
+-- Reload configuration (applies only to non-restart parameters)
 SELECT pg_reload_conf();
 
 -- ==========================================
@@ -141,23 +150,4 @@ $$ LANGUAGE plpgsql;
 -- Verify config
 -- SHOW shared_buffers;
 -- SHOW work_mem;
--- SHOW max_connections;````
-
-### What to do next
-
-1. Apply the `init_db.sql` change above (rebuild the Postgres containers so the new `max_connections` takes effect).
-2. On Windows, create `%USERPROFILE%\.wslconfig`:
-   ```ini
-   [wsl2]
-   memory=24GB
-   processors=8
-   swap=4GB
-   ```
-   Then run `wsl --shutdown` in PowerShell and restart Docker Desktop.
-3. Inside WSL, run `ulimit -n 65536` before `docker compose up` and before running k6.
-4. Start the stack and run:
-   ```bash
-   k6 run -e SCENARIO=ramp_10k k6-load-test.js
-   ```
-
-After those changes, the codebase should be able to attempt a 10k VU stress test on your 32 GB / RTX 4060 machine.
+-- SHOW max_connections;
