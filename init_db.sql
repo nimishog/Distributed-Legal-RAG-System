@@ -3,8 +3,11 @@
 -- pgvector extension, schema, indexes, and utilities
 -- ==========================================
 
--- Enable pgvector extension
+-- Enable pgvector extension (required for VECTOR column type)
 CREATE EXTENSION IF NOT EXISTS vector;
+
+-- Enable pgcrypto extension (required for gen_random_uuid() default)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ==========================================
 -- Legal Chunks Table with pgvector
