@@ -7,23 +7,24 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ==========================================
--- Low-Memory PostgreSQL Configuration
--- Applied via ALTER SYSTEM for portability across versions
--- Target: t3.micro (1 GB RAM) with 2 GB swap
+-- PostgreSQL Configuration for 10k VU Stress Test
+-- Each cpp_database node uses DB_POOL_SIZE=256, so each Postgres instance
+-- must accept at least 256 concurrent connections plus overhead.
+-- Target: 1 GB container limit per Postgres instance.
 -- ==========================================
 
--- Connection limits (20 is ample for 3 shards on a 1 GB host)
-ALTER SYSTEM SET max_connections = 40;
-ALTER SYSTEM SET superuser_reserved_connections = 3;
+-- Connection limits (raised from 40 to 300 to accommodate DB_POOL_SIZE=256)
+ALTER SYSTEM SET max_connections = 300;
+ALTER SYSTEM SET superuser_reserved_connections = 10;
 
--- Memory settings (conservative for 1 GB RAM)
-ALTER SYSTEM SET shared_buffers = '64MB';
+-- Memory settings (conservative for 1 GB RAM containers)
+ALTER SYSTEM SET shared_buffers = '128MB';
 ALTER SYSTEM SET effective_cache_size = '512MB';
 ALTER SYSTEM SET maintenance_work_mem = '64MB';
 ALTER SYSTEM SET work_mem = '16MB';
 ALTER SYSTEM SET huge_pages = 'off';
 
--- Parallelism (disable for low memory)
+-- Parallelism (disable for low memory / high concurrency)
 ALTER SYSTEM SET max_parallel_workers_per_gather = 0;
 ALTER SYSTEM SET max_parallel_workers = 1;
 ALTER SYSTEM SET max_parallel_maintenance_workers = 1;
@@ -140,4 +141,23 @@ $$ LANGUAGE plpgsql;
 -- Verify config
 -- SHOW shared_buffers;
 -- SHOW work_mem;
--- SHOW max_connections;
+-- SHOW max_connections;````
+
+### What to do next
+
+1. Apply the `init_db.sql` change above (rebuild the Postgres containers so the new `max_connections` takes effect).
+2. On Windows, create `%USERPROFILE%\.wslconfig`:
+   ```ini
+   [wsl2]
+   memory=24GB
+   processors=8
+   swap=4GB
+   ```
+   Then run `wsl --shutdown` in PowerShell and restart Docker Desktop.
+3. Inside WSL, run `ulimit -n 65536` before `docker compose up` and before running k6.
+4. Start the stack and run:
+   ```bash
+   k6 run -e SCENARIO=ramp_10k k6-load-test.js
+   ```
+
+After those changes, the codebase should be able to attempt a 10k VU stress test on your 32 GB / RTX 4060 machine.
