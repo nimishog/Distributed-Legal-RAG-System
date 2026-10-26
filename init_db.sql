@@ -10,6 +10,58 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ==========================================
+-- PostgreSQL Configuration
+--
+-- NOTE: The following ALTER SYSTEM settings are written to
+-- postgresql.auto.conf. Parameters marked "(restart required)" do NOT take
+-- effect until the PostgreSQL server is restarted. pg_reload_conf() only
+-- applies parameters that can be reloaded without a restart.
+--
+-- For the local 10k VU stack, max_connections, shared_buffers, wal_buffers,
+-- and huge_pages require a container restart. If you need them active
+-- immediately, pass them as postgres command-line flags in docker-compose
+-- (e.g., command: ["postgres", "-c", "max_connections=300", ...]) instead of
+-- relying on this init script.
+-- ==========================================
+
+-- Connection limits (restart required)
+-- Raised from default 100 to 300 to accommodate DB_POOL_SIZE=256 per shard.
+ALTER SYSTEM SET max_connections = 300;
+ALTER SYSTEM SET superuser_reserved_connections = 10;
+
+-- Memory settings (shared_buffers and huge_pages require restart)
+ALTER SYSTEM SET shared_buffers = '128MB';
+ALTER SYSTEM SET effective_cache_size = '512MB';
+ALTER SYSTEM SET maintenance_work_mem = '64MB';
+ALTER SYSTEM SET work_mem = '16MB';
+ALTER SYSTEM SET huge_pages = 'off';
+
+-- Parallelism
+ALTER SYSTEM SET max_parallel_workers_per_gather = 0;
+ALTER SYSTEM SET max_parallel_workers = 1;
+ALTER SYSTEM SET max_parallel_maintenance_workers = 1;
+
+-- WAL settings (wal_buffers requires restart)
+ALTER SYSTEM SET wal_buffers = '16MB';
+ALTER SYSTEM SET min_wal_size = '80MB';
+ALTER SYSTEM SET max_wal_size = '1GB';
+ALTER SYSTEM SET checkpoint_completion_target = 0.9;
+
+-- Query planner
+ALTER SYSTEM SET random_page_cost = 1.1;
+ALTER SYSTEM SET effective_io_concurrency = 200;
+ALTER SYSTEM SET default_statistics_target = 100;
+
+-- Logging
+ALTER SYSTEM SET log_min_messages = 'WARNING';
+ALTER SYSTEM SET log_min_error_statement = 'ERROR';
+ALTER SYSTEM SET log_statement = 'none';
+ALTER SYSTEM SET log_duration = 'off';
+
+-- Reload configuration (applies only to non-restart parameters)
+SELECT pg_reload_conf();
+
+-- ==========================================
 -- Legal Chunks Table with pgvector
 -- ==========================================
 
