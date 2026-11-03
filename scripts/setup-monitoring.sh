@@ -10,7 +10,7 @@ set -euo pipefail
 COMPOSE_FILE="docker-compose.local.yml"
 
 echo "Starting monitoring stack..."
-docker compose -f "$COMPOSE_FILE" up -d \
+docker-compose -f "$COMPOSE_FILE" up -d \
   prometheus \
   grafana \
   postgres_exporter \

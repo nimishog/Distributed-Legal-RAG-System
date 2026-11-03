@@ -60,3 +60,6 @@ Thumbs.db
 .idea/
 *.swp
 .aider*
+
+# k6 load-test output
+summary.json
