@@ -120,7 +120,7 @@
       },
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
       "id": 9,
-      "options": {"legend": {"calcs": ["mean", "max", "p95"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single"}},
+      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single"}},
       "targets": [
         {"expr": "histogram_quantile(0.50, sum(rate(api_gateway_http_request_duration_seconds_bucket[5m])) by (le, endpoint))", "legendFormat": "p50 {{endpoint}}", "refId": "A"},
         {"expr": "histogram_quantile(0.95, sum(rate(api_gateway_http_request_duration_seconds_bucket[5m])) by (le, endpoint))", "legendFormat": "p95 {{endpoint}}", "refId": "B"},
